@@ -96,6 +96,18 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "$HOME/.hermes/bin" >> $GITHUB_PATH
 
+      - name: Configure Hermes Provider Config for SteveAI
+        run: |
+          mkdir -p $HOME/.hermes
+          cat << 'CONFIG' > $HOME/.hermes/config.yaml
+          provider: openai
+          model: gemini-3.5-flash-lite
+          providers:
+            openai:
+              base_url: https://antigravity-seven-delta.vercel.app/v1
+              api_key: dummy-token
+          CONFIG
+
       - name: Restore Persistent Knowledge Graph & Memory Matrix
         run: |
           mkdir -p $HOME/.hermes/skills $HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads
@@ -133,14 +145,12 @@ jobs:
 
       - name: Run Autonomous Hermes DAGI Master Engine
         env:
-          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
-          OPENAI_API_KEY: ${{ secrets.OPENROUTER_API_KEY || 'not-needed' }}
+          HERMES_PROVIDER: "openai"
           HERMES_MODEL: "gemini-3.5-flash-lite"
+          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
+          OPENAI_API_KEY: "dummy-token"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           HERMES_YOLO: "true"
           HERMES_AUTO_CREATE_SKILLS: "true"
           HERMES_REDIS_URL: "redis://localhost:6379"
@@ -152,11 +162,11 @@ jobs:
           cp -r ./* /tmp/workspace_backup/ 2>/dev/null || true
 
           if command -v hermes &> /dev/null; then
-            hermes chat -q "$GOAL" 2>&1 | tee hermes_execution.log
+            hermes chat -q "$GOAL" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee hermes_execution.log
           elif [ -f "$HOME/.local/bin/hermes" ]; then
-            $HOME/.local/bin/hermes chat -q "$GOAL" 2>&1 | tee hermes_execution.log
+            $HOME/.local/bin/hermes chat -q "$GOAL" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee hermes_execution.log
           else
-            python3 -m hermes_agent chat -q "$GOAL" 2>&1 | tee hermes_execution.log || echo "Hermes execution complete."
+            python3 -m hermes_agent chat -q "$GOAL" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee hermes_execution.log || echo "Hermes execution complete."
           fi
 
       - name: Mask Sensitive Tokens in Output Logs & Build Cryptographic Audit Trail
