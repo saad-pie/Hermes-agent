@@ -52,15 +52,15 @@ jobs:
           ref: ${{ env.HEAD_REF || github.ref }}
           fetch-depth: 0
 
-      # ----------------------------------------------------
-      # CACHING LAYER 1: System Packages & Apt Installs
-      # ----------------------------------------------------
-      - name: Cache Apt System Packages
+      # ====================================================
+      # CACHING LAYER 1: Apt Package Cache
+      # ====================================================
+      - name: Cache Apt Packages
         uses: actions/cache@v4
         id: apt-cache
         with:
           path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-v1
+          key: ${{ runner.os }}-apt-dagi-v1
 
       - name: Install System Infrastructure & Security Tools
         run: |
@@ -76,69 +76,69 @@ jobs:
           echo "DISPLAY=:99" >> $GITHUB_ENV
           echo "CHROME_PATH=/usr/bin/chromium-browser" >> $GITHUB_ENV
 
-      # ----------------------------------------------------
-      # CACHING LAYER 2: Python Environment & Packages
-      # ----------------------------------------------------
+      # ====================================================
+      # CACHING LAYER 2: Python Runtime & Site Packages
+      # ====================================================
       - name: Set up Python Runtime
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Cache Global Python Site-Packages & Pip Download Cache
+      - name: Cache Python Environment & Site Packages
         uses: actions/cache@v4
-        id: pip-cache
+        id: python-cache
         with:
           path: |
             ~/.cache/pip
             /opt/hostedtoolcache/Python/3.11.*/x64/lib/python3.11/site-packages
-          key: ${{ runner.os }}-python-dagi-v1
+          key: ${{ runner.os }}-python-site-packages-v1
 
       - name: Provision Dual-Engine Browser Automation & PDF Parsing
-        if: steps.pip-cache.outputs.cache-hit != 'true'
+        if: steps.python-cache.outputs.cache-hit != 'true'
         run: |
           pip install --upgrade pip
           pip install browser-use playwright pypdf pdfplumber pytesseract pillow redis langchain-openai PyGithub hermes-agent
 
-      # ----------------------------------------------------
+      # ====================================================
       # CACHING LAYER 3: Playwright Chromium Binaries
-      # ----------------------------------------------------
-      - name: Cache Playwright Binaries
+      # ====================================================
+      - name: Cache Playwright Chromium
         uses: actions/cache@v4
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-v1
+          key: ${{ runner.os }}-playwright-chromium-v1
 
       - name: Install Playwright Browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: |
           playwright install chromium --with-deps
 
-      # ----------------------------------------------------
-      # CACHING LAYER 4: Hermes Core Installation & Binaries
-      # ----------------------------------------------------
-      - name: Cache Hermes CLI Binary & Core Tool Assets
+      # ====================================================
+      # CACHING LAYER 4: Hermes Executable & Local Binaries
+      # ====================================================
+      - name: Cache Hermes Executables
         uses: actions/cache@v4
-        id: hermes-binary-cache
+        id: hermes-bin-cache
         with:
           path: |
             ~/.local/bin/hermes
             ~/.hermes/bin
-          key: ${{ runner.os }}-hermes-core-v1
+          key: ${{ runner.os }}-hermes-binaries-v1
 
-      - name: Install Official Hermes Agent
-        if: steps.hermes-binary-cache.outputs.cache-hit != 'true'
+      - name: Install Hermes CLI (Only on Cache Miss)
+        if: steps.hermes-bin-cache.outputs.cache-hit != 'true'
         run: |
           curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash || pip install hermes-agent || true
 
-      - name: Export Hermes Execution Paths
+      - name: Export Hermes Paths
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "$HOME/.hermes/bin" >> $GITHUB_PATH
 
-      # ----------------------------------------------------
-      # EXECUTION & CONFIGURATION
-      # ----------------------------------------------------
+      # ====================================================
+      # EXECUTION LOOP & PERSISTENT MEMORY
+      # ====================================================
       - name: Configure Hermes Provider Config for SteveAI
         run: |
           mkdir -p $HOME/.hermes
@@ -151,7 +151,7 @@ jobs:
               api_key: dummy-token
           CONFIG
 
-      - name: Resolve Active User Context & Restore Per-User Isolated Memory
+      - name: Resolve Active User Context & Restore Isolated Memory
         run: |
           if [ "${{ github.event_name }}" == "issue_comment" ]; then
             USER_ID="${{ github.event.comment.user.login }}"
