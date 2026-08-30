@@ -17,8 +17,6 @@ on:
         description: "Optional Direct URL to a file/image/PDF to ingest"
         required: false
         type: string
-  schedule:
-    - cron: "0 0 * * *"
 
 permissions:
   contents: write
@@ -54,23 +52,29 @@ jobs:
           ref: ${{ env.HEAD_REF || github.ref }}
           fetch-depth: 0
 
-      - name: Set up Python Runtime
+      # -------------------------------------------------------------
+      # 🚀 SPEED OPTIMIZATION: CACHE TOOLING & BROWSER BINARIES
+      # -------------------------------------------------------------
+      - name: Set up Python Runtime with Cache
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: 'pip'
 
-      - name: Set up Node.js Runtime
+      - name: Set up Node.js Runtime with Cache
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: 'npm'
 
-      - name: Set up Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Set up Go Environment
-        uses: actions/setup-go@v5
+      - name: Cache Playwright Chromium Browsers
+        uses: actions/cache@v4
+        id: playwright-cache
         with:
-          go-version: '>=1.22'
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('**/requirements.txt', '**/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
 
       - name: Install System Infrastructure & Security Tools
         run: |
@@ -79,24 +83,21 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             xvfb x11vnc chromium-browser \
             poppler-utils tesseract-ocr ffmpeg ripgrep xz-utils \
-            sqlite3 libsqlite3-dev \
-            build-essential clang net-tools
+            sqlite3 libsqlite3-dev build-essential clang net-tools
           
-          pip install semgrep bandit
-          npm install -g localtunnel ngrok || true
-
           Xvfb :99 -screen 0 1920x1080x24 &
           echo "DISPLAY=:99" >> $GITHUB_ENV
           echo "CHROME_PATH=/usr/bin/chromium-browser" >> $GITHUB_ENV
 
       - name: Provision Dual-Engine Browser Automation & PDF Parsing
         run: |
-          pip install \
-            browser-use playwright \
-            pypdf pdfplumber pytesseract pillow \
-            redis langchain-openai PyGithub
+          pip install --upgrade pip
+          pip install browser-use playwright pypdf pdfplumber pytesseract pillow redis langchain-openai PyGithub
           
-          playwright install chromium --with-deps
+          # Install browser binaries only if not hit by cache
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != 'true' ]; then
+            playwright install chromium --with-deps
+          fi
 
       - name: Install Official Hermes Agent
         run: |
@@ -116,6 +117,9 @@ jobs:
               api_key: dummy-token
           CONFIG
 
+      # -------------------------------------------------------------
+      # 💾 PERSISTENCE: RESTORE USER MEMORY AND FILES
+      # -------------------------------------------------------------
       - name: Resolve Active User Context & Restore Per-User Isolated Memory
         run: |
           if [ "${{ github.event_name }}" == "issue_comment" ]; then
@@ -127,12 +131,11 @@ jobs:
             USER_ID="system_cron"
           fi
 
-          # Sanitize User ID for valid directory paths
           USER_ID=$(echo "$USER_ID" | sed 's/[^a-zA-Z0-9_-]/_/g')
           echo "ACTIVE_USER_ID=$USER_ID" >> $GITHUB_ENV
 
           USER_DIR="./.hermes/users/$USER_ID"
-          mkdir -p $HOME/.hermes/skills $HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory"
+          mkdir -p $HOME/.hermes/skills $HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
 
           if [ -d "$USER_DIR/skills" ]; then
             cp -r "$USER_DIR/skills/"* $HOME/.hermes/skills/ 2>/dev/null || true
@@ -140,11 +143,15 @@ jobs:
           if [ -d "$USER_DIR/memory" ]; then
             cp -r "$USER_DIR/memory/"* $HOME/.hermes/memory/ 2>/dev/null || true
           fi
+          if [ -d "$USER_DIR/files" ]; then
+            cp -r "$USER_DIR/files/"* ./workspace/downloads/ 2>/dev/null || true
+          fi
 
       - name: Ingest Goal Payload & Process File Assets
         id: parse_payload
         run: |
-          mkdir -p ./workspace/downloads
+          USER_FILES="./.hermes/users/$ACTIVE_USER_ID/files"
+          mkdir -p ./workspace/downloads "$USER_FILES"
 
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             GOAL="${{ inputs.goal }}"
@@ -153,7 +160,8 @@ jobs:
               filename=$(basename "$FILE_URL" | cut -d? -f1)
               [ -z "$filename" ] && filename="uploaded_asset"
               curl -sL "$FILE_URL" -o "./workspace/downloads/$filename"
-              GOAL="$GOAL (Ingested user file downloaded to ./workspace/downloads/$filename)"
+              cp "./workspace/downloads/$filename" "$USER_FILES/"
+              GOAL="$GOAL (Ingested file downloaded and saved to ./workspace/downloads/$filename)"
             fi
           elif [ "${{ github.event_name }}" == "schedule" ]; then
             GOAL="Run automated Hermes Cron system maintenance, security audit, and documentation drift checks."
@@ -161,31 +169,29 @@ jobs:
             BODY="${{ github.event.comment.body }}"
             GOAL=$(echo "$BODY" | sed 's/\/hermes//g' | xargs)
             
-            # Extract links or uploaded files from Markdown/Comments
             URLS=$(echo "$BODY" | grep -oE 'https://[^\s\)]+' || true)
             for url in $URLS; do
               filename=$(basename "$url" | cut -d? -f1)
               if [ -n "$filename" ]; then
                 curl -sL "$url" -o "./workspace/downloads/$filename"
-                GOAL="$GOAL (Ingested media asset downloaded to ./workspace/downloads/$filename)"
+                cp "./workspace/downloads/$filename" "$USER_FILES/"
+                GOAL="$GOAL (Ingested media asset downloaded and saved to ./workspace/downloads/$filename)"
               fi
             done
           fi
           echo "GOAL=$GOAL" >> $GITHUB_ENV
 
-      - name: Pre-Flight Operational Guardrails
-        run: |
-          FREE_MEM=$(free -m | awk '/^Mem:/{print $7}')
-          echo "Available RAM: ${FREE_MEM}MB"
-
+      # -------------------------------------------------------------
+      # 🤖 RUN HERMES ENGINE
+      # -------------------------------------------------------------
       - name: Run Autonomous Hermes DAGI Master Engine
         env:
           HERMES_PROVIDER: "openai"
           HERMES_MODEL: "gemini-3.5-flash-lite"
           OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
           OPENAI_API_KEY: "dummy-token"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
           HERMES_YOLO: "true"
           HERMES_AUTO_CREATE_SKILLS: "true"
           HERMES_REDIS_URL: "redis://localhost:6379"
@@ -193,9 +199,6 @@ jobs:
           HERMES_HUMAN_IN_THE_LOOP: "false"
           STEALTH_BROWSER_MODE: "true"
         run: |
-          mkdir -p /tmp/workspace_backup
-          cp -r ./* /tmp/workspace_backup/ 2>/dev/null || true
-
           PROMPT="[User Context: $ACTIVE_USER_ID] $GOAL"
 
           if command -v hermes &> /dev/null; then
@@ -206,12 +209,11 @@ jobs:
             python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee hermes_execution.log || echo "Hermes execution complete."
           fi
 
-      - name: Mask Sensitive Tokens in Output Logs & Build Cryptographic Audit Trail
+      - name: Mask Sensitive Tokens in Output Logs
         if: ${{ always() }}
         run: |
           if [ -f "hermes_execution.log" ]; then
-            sed -i -E 's/(ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{32,}|xoxb-[0-9]{10,}-[A-Za-z0-9]+)/[MASKED_SECRET]/g' hermes_execution.log
-            sha256sum hermes_execution.log > hermes_execution.audit.sha256
+            sed -i -E 's/(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]{32,})/[MASKED_SECRET]/g' hermes_execution.log
           fi
 
       - name: Dispatch Multi-Platform Execution Summary
@@ -232,24 +234,30 @@ jobs:
               body: `🚀 **Hermes DAGI Autonomous OS Agent Report**\n*User Context:* \`${process.env.ACTIVE_USER_ID}\`\n\n\`\`\`text\n${output}\n\`\`\``
             });
 
-      - name: Commit Auto-Synthesized Skills & Isolated Per-User Knowledge Base
+      # -------------------------------------------------------------
+      # 🛡️ COMMIT BACK USER MEMORY & FILES (PRESERVING ALL DATA)
+      # -------------------------------------------------------------
+      - name: Commit Auto-Synthesized Skills & Persistent User Memory/Files
         if: ${{ always() }}
         run: |
           USER_DIR="./.hermes/users/$ACTIVE_USER_ID"
-          mkdir -p "$USER_DIR/skills" "$USER_DIR/memory"
+          mkdir -p "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
           
           cp -r $HOME/.hermes/skills/* "$USER_DIR/skills/" 2>/dev/null || true
           cp -r $HOME/.hermes/memory/* "$USER_DIR/memory/" 2>/dev/null || true
 
           git config --global user.name "Hermes Master DAGI Agent"
           git config --global user.email "hermes-dagi@users.noreply.github.com"
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           
+          # Fetch latest remote state to prevent overwriting updates
+          git fetch origin
+          git checkout ${{ env.HEAD_REF || github.ref_name }}
+          git pull --rebase origin ${{ env.HEAD_REF || github.ref_name }} || true
+
           git add .hermes/
           if ! git diff --cached --quiet; then
-            git commit -m "chore(hermes): sync skills & memory graph for user '$ACTIVE_USER_ID' [skip ci]"
-            git pull --rebase origin HEAD:${{ env.HEAD_REF || github.ref_name }} || true
-            git push origin HEAD:${{ env.HEAD_REF || github.ref_name }}
+            git commit -m "chore(hermes): save persistent user memory & files for '$ACTIVE_USER_ID' [skip ci]"
+            git push origin ${{ env.HEAD_REF || github.ref_name }}
           else
-            echo "No user memory or skill state changes to commit."
+            echo "No changes to user memory or persistent files."
           fi
