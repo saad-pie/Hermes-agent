@@ -31,7 +31,6 @@ jobs:
           - 6379:6379
       dind:
         image: docker:dind
-        privileged: true
         ports:
           - 2375:2375
 
