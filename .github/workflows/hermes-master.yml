@@ -52,26 +52,15 @@ jobs:
           ref: ${{ env.HEAD_REF || github.ref }}
           fetch-depth: 0
 
-      - name: Set up Python Runtime with Cache
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: 'pip'
-
-      - name: Set up Node.js Runtime with Cache
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: 'npm'
-
-      - name: Cache Playwright Chromium Browsers
+      # ----------------------------------------------------
+      # CACHING LAYER 1: System Packages & Apt Installs
+      # ----------------------------------------------------
+      - name: Cache Apt System Packages
         uses: actions/cache@v4
-        id: playwright-cache
+        id: apt-cache
         with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('**/requirements.txt', '**/package.json') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
+          path: /var/cache/apt/archives
+          key: ${{ runner.os }}-apt-v1
 
       - name: Install System Infrastructure & Security Tools
         run: |
@@ -83,24 +72,73 @@ jobs:
             sqlite3 libsqlite3-dev build-essential clang net-tools
           
           Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 1
           echo "DISPLAY=:99" >> $GITHUB_ENV
           echo "CHROME_PATH=/usr/bin/chromium-browser" >> $GITHUB_ENV
 
+      # ----------------------------------------------------
+      # CACHING LAYER 2: Python Environment & Packages
+      # ----------------------------------------------------
+      - name: Set up Python Runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache Global Python Site-Packages & Pip Download Cache
+        uses: actions/cache@v4
+        id: pip-cache
+        with:
+          path: |
+            ~/.cache/pip
+            /opt/hostedtoolcache/Python/3.11.*/x64/lib/python3.11/site-packages
+          key: ${{ runner.os }}-python-dagi-v1
+
       - name: Provision Dual-Engine Browser Automation & PDF Parsing
+        if: steps.pip-cache.outputs.cache-hit != 'true'
         run: |
           pip install --upgrade pip
-          pip install browser-use playwright pypdf pdfplumber pytesseract pillow redis langchain-openai PyGithub
-          
-          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" != 'true' ]; then
-            playwright install chromium --with-deps
-          fi
+          pip install browser-use playwright pypdf pdfplumber pytesseract pillow redis langchain-openai PyGithub hermes-agent
+
+      # ----------------------------------------------------
+      # CACHING LAYER 3: Playwright Chromium Binaries
+      # ----------------------------------------------------
+      - name: Cache Playwright Binaries
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-v1
+
+      - name: Install Playwright Browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: |
+          playwright install chromium --with-deps
+
+      # ----------------------------------------------------
+      # CACHING LAYER 4: Hermes Core Installation & Binaries
+      # ----------------------------------------------------
+      - name: Cache Hermes CLI Binary & Core Tool Assets
+        uses: actions/cache@v4
+        id: hermes-binary-cache
+        with:
+          path: |
+            ~/.local/bin/hermes
+            ~/.hermes/bin
+          key: ${{ runner.os }}-hermes-core-v1
 
       - name: Install Official Hermes Agent
+        if: steps.hermes-binary-cache.outputs.cache-hit != 'true'
         run: |
           curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash || pip install hermes-agent || true
+
+      - name: Export Hermes Execution Paths
+        run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "$HOME/.hermes/bin" >> $GITHUB_PATH
 
+      # ----------------------------------------------------
+      # EXECUTION & CONFIGURATION
+      # ----------------------------------------------------
       - name: Configure Hermes Provider Config for SteveAI
         run: |
           mkdir -p $HOME/.hermes
@@ -176,7 +214,6 @@ jobs:
             done
           fi
           
-          # Safely append goal to environment without command-injection/quote failures
           EOF_MARKER=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
           echo "GOAL<<$EOF_MARKER" >> $GITHUB_ENV
           echo "$GOAL" >> $GITHUB_ENV
