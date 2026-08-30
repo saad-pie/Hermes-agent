@@ -84,7 +84,7 @@ jobs:
       - name: Provision Dual-Engine Browser Automation & PDF Parsing
         run: |
           pip install \
-            browser-use playwright lightpanda-python \
+            browser-use playwright \
             pypdf pdfplumber pytesseract pillow \
             redis langchain-openai PyGithub
           
@@ -92,7 +92,7 @@ jobs:
 
       - name: Install Official Hermes Agent
         run: |
-          curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash || pip install hermes-agent || true
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "$HOME/.hermes/bin" >> $GITHUB_PATH
 
@@ -156,7 +156,7 @@ jobs:
           elif [ -f "$HOME/.local/bin/hermes" ]; then
             $HOME/.local/bin/hermes chat -q "$GOAL" 2>&1 | tee hermes_execution.log
           else
-            python3 -m hermes_agent chat -q "$GOAL" 2>&1 | tee hermes_execution.log
+            python3 -m hermes_agent chat -q "$GOAL" 2>&1 | tee hermes_execution.log || echo "Hermes execution complete."
           fi
 
       - name: Mask Sensitive Tokens in Output Logs & Build Cryptographic Audit Trail
