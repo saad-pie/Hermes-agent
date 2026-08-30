@@ -29,10 +29,6 @@ jobs:
         image: redis:7-alpine
         ports:
           - 6379:6379
-      dind:
-        image: docker:dind
-        ports:
-          - 2375:2375
 
     steps:
       - name: Extract PR Ref Context
@@ -70,15 +66,16 @@ jobs:
 
       - name: Install System Infrastructure & Security Tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
             xvfb x11vnc chromium-browser \
             poppler-utils tesseract-ocr ffmpeg ripgrep xz-utils \
-            overlayfs-tools sqlite3 libsqlite3-dev \
+            sqlite3 libsqlite3-dev \
             build-essential clang net-tools
           
-          pip install semgrep bandit trivy-pip-extension
-          npm install -g localtunnel ngrok
+          pip install semgrep bandit
+          npm install -g localtunnel ngrok || true
 
           Xvfb :99 -screen 0 1920x1080x24 &
           echo "DISPLAY=:99" >> $GITHUB_ENV
