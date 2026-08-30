@@ -1,0 +1,209 @@
+name: Hermes Master DAGI Autonomous OS Workflow
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      goal:
+        description: "Autonomous Goal for Hermes Agent"
+        required: true
+        type: string
+  schedule:
+    - cron: "0 0 * * *"
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: read
+  checks: write
+
+jobs:
+  hermes-dagi-core:
+    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') || (contains(github.event.comment.body, '/hermes') && !github.event.comment.user.bot) }}
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+      dind:
+        image: docker:dind
+        privileged: true
+        ports:
+          - 2375:2375
+
+    steps:
+      - name: Extract PR Ref Context
+        if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request }}
+        id: pr_data
+        run: |
+          PR_URL="${{ github.event.issue.pull_request.url }}"
+          PR_JSON=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$PR_URL")
+          HEAD_REF=$(echo "$PR_JSON" | jq -r .head.ref)
+          echo "HEAD_REF=$HEAD_REF" >> $GITHUB_ENV
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_REF || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up Python Runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js Runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Go Environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: '>=1.22'
+
+      - name: Install System Infrastructure & Security Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            xvfb x11vnc chromium-browser \
+            poppler-utils tesseract-ocr ffmpeg ripgrep xz-utils \
+            overlayfs-tools sqlite3 libsqlite3-dev \
+            build-essential clang net-tools
+          
+          pip install semgrep bandit trivy-pip-extension
+          npm install -g localtunnel ngrok
+
+          Xvfb :99 -screen 0 1920x1080x24 &
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+          echo "CHROME_PATH=/usr/bin/chromium-browser" >> $GITHUB_ENV
+
+      - name: Provision Dual-Engine Browser Automation & PDF Parsing
+        run: |
+          pip install \
+            browser-use playwright lightpanda-python \
+            pypdf pdfplumber pytesseract pillow \
+            redis langchain-openai PyGithub
+          
+          playwright install chromium --with-deps
+
+      - name: Install Official Hermes Agent
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          echo "$HOME/.hermes/bin" >> $GITHUB_PATH
+
+      - name: Restore Persistent Knowledge Graph & Memory Matrix
+        run: |
+          mkdir -p $HOME/.hermes/skills $HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads
+          if [ -d "./.hermes/skills" ]; then
+            cp -r ./.hermes/skills/* $HOME/.hermes/skills/ 2>/dev/null || true
+          fi
+          if [ -d "./.hermes/memory" ]; then
+            cp -r ./.hermes/memory/* $HOME/.hermes/memory/ 2>/dev/null || true
+          fi
+
+      - name: Ingest Goal Payload & Process Event-Driven Assets
+        id: parse_payload
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            GOAL="${{ inputs.goal }}"
+          elif [ "${{ github.event_name }}" == "schedule" ]; then
+            GOAL="Run automated Hermes Cron system maintenance, security audit, and documentation drift checks."
+          else
+            BODY="${{ github.event.comment.body }}"
+            GOAL=$(echo "$BODY" | sed 's/\/hermes//g' | xargs)
+            
+            URLS=$(echo "$BODY" | grep -oE 'https://[^\s\)]+\.(pdf|png|jpg|jpeg|svg)' || true)
+            for url in $URLS; do
+              filename=$(basename "$url")
+              curl -sL "$url" -o "./workspace/downloads/$filename"
+              GOAL="$GOAL (Ingested media asset downloaded to ./workspace/downloads/$filename)"
+            done
+          fi
+          echo "GOAL=$GOAL" >> $GITHUB_ENV
+
+      - name: Pre-Flight Operational Guardrails
+        run: |
+          FREE_MEM=$(free -m | awk '/^Mem:/{print $7}')
+          echo "Available RAM: ${FREE_MEM}MB"
+
+      - name: Run Autonomous Hermes DAGI Master Engine
+        env:
+          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
+          OPENAI_API_KEY: ${{ secrets.OPENROUTER_API_KEY || 'not-needed' }}
+          HERMES_MODEL: "gemini-3.5-flash-lite"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          HERMES_YOLO: "true"
+          HERMES_AUTO_CREATE_SKILLS: "true"
+          HERMES_REDIS_URL: "redis://localhost:6379"
+          HERMES_MAX_TOKEN_BUDGET: "100000"
+          HERMES_HUMAN_IN_THE_LOOP: "false"
+          STEALTH_BROWSER_MODE: "true"
+        run: |
+          mkdir -p /tmp/workspace_backup
+          cp -r ./* /tmp/workspace_backup/ 2>/dev/null || true
+
+          if command -v hermes &> /dev/null; then
+            hermes chat -q "$GOAL" 2>&1 | tee hermes_execution.log
+          elif [ -f "$HOME/.local/bin/hermes" ]; then
+            $HOME/.local/bin/hermes chat -q "$GOAL" 2>&1 | tee hermes_execution.log
+          else
+            python3 -m hermes_agent chat -q "$GOAL" 2>&1 | tee hermes_execution.log
+          fi
+
+      - name: Mask Sensitive Tokens in Output Logs & Build Cryptographic Audit Trail
+        if: ${{ always() }}
+        run: |
+          if [ -f "hermes_execution.log" ]; then
+            sed -i -E 's/(ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{32,}|xoxb-[0-9]{10,}-[A-Za-z0-9]+)/[MASKED_SECRET]/g' hermes_execution.log
+            sha256sum hermes_execution.log > hermes_execution.audit.sha256
+          fi
+
+      - name: Dispatch Multi-Platform Execution Summary
+        if: ${{ always() && github.event_name == 'issue_comment' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let output = "Execution finished without log trace.";
+            if (fs.existsSync('hermes_execution.log')) {
+              const fullLog = fs.readFileSync('hermes_execution.log', 'utf8');
+              output = fullLog.length > 3500 ? "...\n" + fullLog.slice(-3500) : fullLog;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `🚀 **Hermes DAGI Autonomous OS Agent Report**\n\n\`\`\`text\n${output}\n\`\`\``
+            });
+
+      - name: Commit Auto-Synthesized Skills & Knowledge Graph
+        if: ${{ always() }}
+        run: |
+          mkdir -p ./.hermes/skills ./.hermes/memory ./.hermes/fts5
+          cp -r $HOME/.hermes/skills/* ./.hermes/skills/ 2>/dev/null || true
+          cp -r $HOME/.hermes/memory/* ./.hermes/memory/ 2>/dev/null || true
+
+          git config --global user.name "Hermes Master DAGI Agent"
+          git config --global user.email "hermes-dagi@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          
+          git add .hermes/
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(hermes): auto-synthesize skills, update memory graph & fts5 index [skip ci]"
+            git push origin HEAD:${{ env.HEAD_REF || github.ref_name }}
+          else
+            echo "No state or skill changes to commit."
+          fi
