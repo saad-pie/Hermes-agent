@@ -3,12 +3,8 @@ name: Hermes Master DAGI Autonomous OS Workflow
 on:
   issue_comment:
     types: [created]
-  workflow_dispatch:
-    inputs:
-      goal:
-        description: "Autonomous Goal for Hermes Agent"
-        required: true
-        type: string
+  schedule:
+    - cron: '0 0 * * *' # Optional daily maintenance cron
 
 permissions:
   contents: write
@@ -19,7 +15,7 @@ permissions:
 
 jobs:
   hermes-dagi-core:
-    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') || (contains(github.event.comment.body, '/hermes') && !github.event.comment.user.bot) }}
+    if: ${{ (github.event_name == 'schedule') || (contains(github.event.comment.body, '/hermes') && !github.event.comment.user.bot) }}
     runs-on: ubuntu-latest
 
     services:
@@ -148,7 +144,7 @@ jobs:
           if [ "${{ github.event_name }}" == "issue_comment" ]; then
             USER_ID="${{ github.event.comment.user.login }}"
           else
-            USER_ID="${{ github.actor }}"
+            USER_ID="system_cron"
           fi
 
           USER_ID=$(echo "$USER_ID" | sed 's/[^a-zA-Z0-9_-]/_/g')
@@ -170,16 +166,25 @@ jobs:
       - name: Ingest Goal Payload
         id: parse_payload
         env:
-          INPUT_GOAL: ${{ inputs.goal }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           USER_FILES="./.hermes/users/$ACTIVE_USER_ID/files"
           mkdir -p ./workspace/downloads "$USER_FILES"
 
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            GOAL="$INPUT_GOAL"
+          if [ "${{ github.event_name }}" == "schedule" ]; then
+            GOAL="Run automated Hermes Cron system maintenance, security audit, and documentation drift checks."
           else
             GOAL=$(echo "$COMMENT_BODY" | sed 's/\/hermes//g' | xargs)
+            
+            URLS=$(echo "$COMMENT_BODY" | grep -oE 'https://[^\s\)]+' || true)
+            for url in $URLS; do
+              filename=$(basename "$url" | cut -d? -f1)
+              if [ -n "$filename" ]; then
+                curl -sL "$url" -o "./workspace/downloads/$filename"
+                cp "./workspace/downloads/$filename" "$USER_FILES/"
+                GOAL="$GOAL (Ingested media asset downloaded and saved to ./workspace/downloads/$filename)"
+              fi
+            done
           fi
           
           EOF_MARKER=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
