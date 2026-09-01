@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       question:
-        description: "Ask a Question to Hermes Agent"
+        description: "Question or Prompt for Hermes Agent"
         required: true
         type: string
       user_id:
