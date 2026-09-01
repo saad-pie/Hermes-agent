@@ -9,14 +9,6 @@ on:
         description: "Autonomous Goal for Hermes Agent"
         required: true
         type: string
-      user_id:
-        description: "Firebase UID or User Identifier for Isolated Memory"
-        required: false
-        type: string
-      file_url:
-        description: "Optional Direct URL to a file/image/PDF to ingest"
-        required: false
-        type: string
 
 permissions:
   contents: write
@@ -155,11 +147,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" == "issue_comment" ]; then
             USER_ID="${{ github.event.comment.user.login }}"
-          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            USER_ID="${{ inputs.user_id }}"
-            [ -z "$USER_ID" ] && USER_ID="${{ github.actor }}"
           else
-            USER_ID="system_cron"
+            USER_ID="${{ github.actor }}"
           fi
 
           USER_ID=$(echo "$USER_ID" | sed 's/[^a-zA-Z0-9_-]/_/g')
@@ -178,11 +167,10 @@ jobs:
             cp -r "$USER_DIR/files/"* ./workspace/downloads/ 2>/dev/null || true
           fi
 
-      - name: Ingest Goal Payload & Process File Assets
+      - name: Ingest Goal Payload
         id: parse_payload
         env:
           INPUT_GOAL: ${{ inputs.goal }}
-          INPUT_FILE_URL: ${{ inputs.file_url }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           USER_FILES="./.hermes/users/$ACTIVE_USER_ID/files"
@@ -190,28 +178,8 @@ jobs:
 
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             GOAL="$INPUT_GOAL"
-            FILE_URL="$INPUT_FILE_URL"
-            if [ -n "$FILE_URL" ]; then
-              filename=$(basename "$FILE_URL" | cut -d? -f1)
-              [ -z "$filename" ] && filename="uploaded_asset"
-              curl -sL "$FILE_URL" -o "./workspace/downloads/$filename"
-              cp "./workspace/downloads/$filename" "$USER_FILES/"
-              GOAL="$GOAL (Ingested file downloaded and saved to ./workspace/downloads/$filename)"
-            fi
-          elif [ "${{ github.event_name }}" == "schedule" ]; then
-            GOAL="Run automated Hermes Cron system maintenance, security audit, and documentation drift checks."
           else
             GOAL=$(echo "$COMMENT_BODY" | sed 's/\/hermes//g' | xargs)
-            
-            URLS=$(echo "$COMMENT_BODY" | grep -oE 'https://[^\s\)]+' || true)
-            for url in $URLS; do
-              filename=$(basename "$url" | cut -d? -f1)
-              if [ -n "$filename" ]; then
-                curl -sL "$url" -o "./workspace/downloads/$filename"
-                cp "./workspace/downloads/$filename" "$USER_FILES/"
-                GOAL="$GOAL (Ingested media asset downloaded and saved to ./workspace/downloads/$filename)"
-              fi
-            done
           fi
           
           EOF_MARKER=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
