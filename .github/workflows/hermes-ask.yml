@@ -1,0 +1,86 @@
+name: Hermes Ask Agent
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      question:
+        description: "Your Question for Hermes Agent"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  hermes-ask:
+    if: ${{ (github.event_name == 'workflow_dispatch') || (contains(github.event.comment.body, '/ask') && !github.event.comment.user.bot) }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Python Runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Hermes CLI
+        run: |
+          pip install --upgrade pip
+          pip install hermes-agent langchain-openai
+
+      - name: Configure Hermes Provider
+        run: |
+          mkdir -p $HOME/.hermes
+          cat << 'CONFIG' > $HOME/.hermes/config.yaml
+          provider: openai
+          model: gemini-3.5-flash-lite
+          providers:
+            openai:
+              base_url: https://antigravity-seven-delta.vercel.app/v1
+              api_key: dummy-token
+          CONFIG
+
+      - name: Resolve Question
+        id: get_question
+        env:
+          INPUT_QUESTION: ${{ inputs.question }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            QUESTION="$INPUT_QUESTION"
+          else
+            QUESTION=$(echo "$COMMENT_BODY" | sed 's/\/ask//g' | xargs)
+          fi
+          
+          EOF_MARKER=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "QUESTION<<$EOF_MARKER" >> $GITHUB_ENV
+          echo "$QUESTION" >> $GITHUB_ENV
+          echo "$EOF_MARKER" >> $GITHUB_ENV
+
+      - name: Ask Hermes Agent
+        env:
+          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
+          OPENAI_API_KEY: "dummy-token"
+        run: |
+          python3 -m hermes_agent chat -q "$QUESTION" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee ask_execution.log || echo "Ask finished."
+
+      - name: Reply to Issue / PR
+        if: ${{ always() && github.event_name == 'issue_comment' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let output = "No response generated.";
+            if (fs.existsSync('ask_execution.log')) {
+              const fullLog = fs.readFileSync('ask_execution.log', 'utf8');
+              output = fullLog.length > 3500 ? "...\n" + fullLog.slice(-3500) : fullLog;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `💬 **Hermes Agent Answer:**\n\n${output}`
+            });
