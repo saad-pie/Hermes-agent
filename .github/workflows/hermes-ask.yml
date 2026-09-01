@@ -6,8 +6,16 @@ on:
   workflow_dispatch:
     inputs:
       question:
-        description: "Your Question for Hermes Agent"
+        description: "Ask a Question to Hermes Agent"
         required: true
+        type: string
+      user_id:
+        description: "Firebase UID or User Identifier for Isolated Memory"
+        required: false
+        type: string
+      file_url:
+        description: "Optional Direct URL to a file/image/PDF to ingest"
+        required: false
         type: string
 
 permissions:
@@ -26,7 +34,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Hermes CLI
+      - name: Install Dependencies
         run: |
           pip install --upgrade pip
           pip install hermes-agent langchain-openai
@@ -43,16 +51,34 @@ jobs:
               api_key: dummy-token
           CONFIG
 
-      - name: Resolve Question
-        id: get_question
+      - name: Resolve Question & Ingest Attachments
+        id: parse_question
         env:
           INPUT_QUESTION: ${{ inputs.question }}
+          INPUT_FILE_URL: ${{ inputs.file_url }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
+          mkdir -p ./workspace/downloads
+
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             QUESTION="$INPUT_QUESTION"
+            FILE_URL="$INPUT_FILE_URL"
+            if [ -n "$FILE_URL" ]; then
+              filename=$(basename "$FILE_URL" | cut -d? -f1)
+              [ -z "$filename" ] && filename="uploaded_asset"
+              curl -sL "$FILE_URL" -o "./workspace/downloads/$filename"
+              QUESTION="$QUESTION (Ingested file downloaded to ./workspace/downloads/$filename)"
+            fi
           else
             QUESTION=$(echo "$COMMENT_BODY" | sed 's/\/ask//g' | xargs)
+            URLS=$(echo "$COMMENT_BODY" | grep -oE 'https://[^\s\)]+' || true)
+            for url in $URLS; do
+              filename=$(basename "$url" | cut -d? -f1)
+              if [ -n "$filename" ]; then
+                curl -sL "$url" -o "./workspace/downloads/$filename"
+                QUESTION="$QUESTION (Ingested asset saved to ./workspace/downloads/$filename)"
+              fi
+            done
           fi
           
           EOF_MARKER=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
@@ -65,15 +91,15 @@ jobs:
           OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
           OPENAI_API_KEY: "dummy-token"
         run: |
-          python3 -m hermes_agent chat -q "$QUESTION" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee ask_execution.log || echo "Ask finished."
+          python3 -m hermes_agent chat -q "$QUESTION" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee ask_execution.log || echo "Execution complete."
 
-      - name: Reply to Issue / PR
+      - name: Reply to Issue or PR
         if: ${{ always() && github.event_name == 'issue_comment' }}
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            let output = "No response generated.";
+            let output = "No output generated.";
             if (fs.existsSync('ask_execution.log')) {
               const fullLog = fs.readFileSync('ask_execution.log', 'utf8');
               output = fullLog.length > 3500 ? "...\n" + fullLog.slice(-3500) : fullLog;
@@ -82,5 +108,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `💬 **Hermes Agent Answer:**\n\n${output}`
+              body: `💬 **Hermes Agent Answer:**\n\n\`\`\`text\n${output}\n\`\`\``
             });
