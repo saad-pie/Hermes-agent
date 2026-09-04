@@ -1,21 +1,22 @@
 name: Hermes Master DAGI Autonomous OS Workflow
 
 on:
+  workflow_dispatch:
   issue_comment:
     types: [created]
   schedule:
-    - cron: '0 0 * * *' # Optional daily maintenance cron
+    - cron: '0 0 * * *'
 
 permissions:
   contents: write
   issues: write
   pull-requests: write
-  actions: read
+  actions: write
   checks: write
 
 jobs:
   hermes-dagi-core:
-    if: ${{ (github.event_name == 'schedule') || (contains(github.event.comment.body, '/hermes') && !github.event.comment.user.bot) }}
+    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') || (contains(github.event.comment.body, '/hermes') && !github.event.comment.user.bot) }}
     runs-on: ubuntu-latest
 
     services:
@@ -40,16 +41,6 @@ jobs:
           ref: ${{ env.HEAD_REF || github.ref }}
           fetch-depth: 0
 
-      # ====================================================
-      # CACHING LAYER 1: Apt Package Cache
-      # ====================================================
-      - name: Cache Apt Packages
-        uses: actions/cache@v4
-        id: apt-cache
-        with:
-          path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-dagi-v1
-
       - name: Install System Infrastructure & Security Tools
         run: |
           export DEBIAN_FRONTEND=noninteractive
@@ -64,58 +55,21 @@ jobs:
           echo "DISPLAY=:99" >> $GITHUB_ENV
           echo "CHROME_PATH=/usr/bin/chromium-browser" >> $GITHUB_ENV
 
-      # ====================================================
-      # CACHING LAYER 2: Python Runtime & Site Packages
-      # ====================================================
       - name: Set up Python Runtime
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Cache Python Environment & Site Packages
-        uses: actions/cache@v4
-        id: python-cache
-        with:
-          path: |
-            ~/.cache/pip
-            /opt/hostedtoolcache/Python/3.11.*/x64/lib/python3.11/site-packages
-          key: ${{ runner.os }}-python-site-packages-v1
-
-      - name: Provision Dual-Engine Browser Automation & PDF Parsing
-        if: steps.python-cache.outputs.cache-hit != 'true'
+      - name: Provision Dual-Engine Browser Automation & Dependencies
         run: |
           pip install --upgrade pip
           pip install browser-use playwright pypdf pdfplumber pytesseract pillow redis langchain-openai PyGithub hermes-agent
 
-      # ====================================================
-      # CACHING LAYER 3: Playwright Chromium Binaries
-      # ====================================================
-      - name: Cache Playwright Chromium
-        uses: actions/cache@v4
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-chromium-v1
-
       - name: Install Playwright Browsers
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: |
           playwright install chromium --with-deps
 
-      # ====================================================
-      # CACHING LAYER 4: Hermes Executable & Local Binaries
-      # ====================================================
-      - name: Cache Hermes Executables
-        uses: actions/cache@v4
-        id: hermes-bin-cache
-        with:
-          path: |
-            ~/.local/bin/hermes
-            ~/.hermes/bin
-          key: ${{ runner.os }}-hermes-binaries-v1
-
-      - name: Install Hermes CLI (Only on Cache Miss)
-        if: steps.hermes-bin-cache.outputs.cache-hit != 'true'
+      - name: Install Hermes CLI
         run: |
           curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash || pip install hermes-agent || true
 
@@ -124,9 +78,6 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "$HOME/.hermes/bin" >> $GITHUB_PATH
 
-      # ====================================================
-      # EXECUTION LOOP & PERSISTENT MEMORY
-      # ====================================================
       - name: Configure Hermes Provider Config for SteveAI
         run: |
           mkdir -p $HOME/.hermes
@@ -171,7 +122,7 @@ jobs:
           USER_FILES="./.hermes/users/$ACTIVE_USER_ID/files"
           mkdir -p ./workspace/downloads "$USER_FILES"
 
-          if [ "${{ github.event_name }}" == "schedule" ]; then
+          if [ "${{ github.event_name }}" == "schedule" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             GOAL="Run automated Hermes Cron system maintenance, security audit, and documentation drift checks."
           else
             GOAL=$(echo "$COMMENT_BODY" | sed 's/\/hermes//g' | xargs)
@@ -265,3 +216,15 @@ jobs:
           else
             echo "No changes to user memory or persistent files."
           fi
+
+      - name: Cache Complete Environment State for Hermes Ask
+        if: ${{ always() }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /opt/hostedtoolcache/Python/3.11.*/x64
+            ~/.cache/pip
+            ~/.cache/ms-playwright
+            ~/.local/bin
+            ~/.hermes
+          key: hermes-dagi-master-cache-v1
