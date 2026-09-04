@@ -29,15 +29,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout Workspace
+        uses: actions/checkout@v4
+
       - name: Set up Python Runtime
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
-      - name: Install Dependencies
+      - name: Install System & Hermes Agent Dependencies
         run: |
+          sudo apt-get update && sudo apt-get install -y ripgrep ffmpeg
+          curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+          echo "$HOME/.hermes/bin" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
           pip install --upgrade pip
-          pip install hermes-agent langchain-openai
+          pip install langchain-openai
 
       - name: Configure Hermes Provider
         run: |
@@ -91,7 +99,7 @@ jobs:
           OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
           OPENAI_API_KEY: "dummy-token"
         run: |
-          python3 -m hermes_agent chat -q "$QUESTION" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee ask_execution.log || echo "Execution complete."
+          hermes chat -q "$QUESTION" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee ask_execution.log || echo "Execution complete."
 
       - name: Reply to Issue or PR
         if: ${{ always() && github.event_name == 'issue_comment' }}
