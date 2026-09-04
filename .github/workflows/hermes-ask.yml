@@ -28,24 +28,49 @@ jobs:
     if: ${{ (github.event_name == 'workflow_dispatch') || (contains(github.event.comment.body, '/ask') && !github.event.comment.user.bot) }}
     runs-on: ubuntu-latest
 
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
     steps:
+      - name: Extract PR Ref Context
+        if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request }}
+        id: pr_data
+        run: |
+          PR_URL="${{ github.event.issue.pull_request.url }}"
+          PR_JSON=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$PR_URL")
+          HEAD_REF=$(echo "$PR_JSON" | jq -r .head.ref)
+          echo "HEAD_REF=$HEAD_REF" >> $GITHUB_ENV
+
       - name: Checkout Workspace
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HEAD_REF || github.ref }}
+          fetch-depth: 0
 
       - name: Set up Python Runtime
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
-      - name: Install System & Hermes Agent Dependencies
+      - name: Restore Pre-Built Hermes Master Environment Cache
+        uses: actions/cache/restore@v4
+        id: restore-master-cache
+        with:
+          path: |
+            /opt/hostedtoolcache/Python/3.11.*/x64
+            ~/.cache/pip
+            ~/.cache/ms-playwright
+            ~/.local/bin
+            ~/.hermes
+          key: hermes-dagi-master-cache-v1
+
+      - name: Export Executable Paths
         run: |
-          sudo apt-get update && sudo apt-get install -y ripgrep ffmpeg
-          curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-          echo "$HOME/.hermes/bin" >> $GITHUB_PATH
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-          pip install --upgrade pip
-          pip install langchain-openai
+          echo "$HOME/.hermes/bin" >> $GITHUB_PATH
 
       - name: Configure Hermes Provider
         run: |
@@ -59,6 +84,32 @@ jobs:
               api_key: dummy-token
           CONFIG
 
+      - name: Resolve Active User Context & Restore Isolated Memory
+        run: |
+          if [ "${{ github.event_name }}" == "issue_comment" ]; then
+            USER_ID="${{ github.event.comment.user.login }}"
+          elif [ -n "${{ inputs.user_id }}" ]; then
+            USER_ID="${{ inputs.user_id }}"
+          else
+            USER_ID="dispatch_user"
+          fi
+
+          USER_ID=$(echo "$USER_ID" | sed 's/[^a-zA-Z0-9_-]/_/g')
+          echo "ACTIVE_USER_ID=$USER_ID" >> $GITHUB_ENV
+
+          USER_DIR="./.hermes/users/$USER_ID"
+          mkdir -p $HOME/.hermes/skills $HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
+
+          if [ -d "$USER_DIR/skills" ]; then
+            cp -r "$USER_DIR/skills/"* $HOME/.hermes/skills/ 2>/dev/null || true
+          fi
+          if [ -d "$USER_DIR/memory" ]; then
+            cp -r "$USER_DIR/memory/"* $HOME/.hermes/memory/ 2>/dev/null || true
+          fi
+          if [ -d "$USER_DIR/files" ]; then
+            cp -r "$USER_DIR/files/"* ./workspace/downloads/ 2>/dev/null || true
+          fi
+
       - name: Resolve Question & Ingest Attachments
         id: parse_question
         env:
@@ -66,7 +117,8 @@ jobs:
           INPUT_FILE_URL: ${{ inputs.file_url }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          mkdir -p ./workspace/downloads
+          USER_FILES="./.hermes/users/$ACTIVE_USER_ID/files"
+          mkdir -p ./workspace/downloads "$USER_FILES"
 
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             QUESTION="$INPUT_QUESTION"
@@ -75,6 +127,7 @@ jobs:
               filename=$(basename "$FILE_URL" | cut -d? -f1)
               [ -z "$filename" ] && filename="uploaded_asset"
               curl -sL "$FILE_URL" -o "./workspace/downloads/$filename"
+              cp "./workspace/downloads/$filename" "$USER_FILES/"
               QUESTION="$QUESTION (Ingested file downloaded to ./workspace/downloads/$filename)"
             fi
           else
@@ -84,6 +137,7 @@ jobs:
               filename=$(basename "$url" | cut -d? -f1)
               if [ -n "$filename" ]; then
                 curl -sL "$url" -o "./workspace/downloads/$filename"
+                cp "./workspace/downloads/$filename" "$USER_FILES/"
                 QUESTION="$QUESTION (Ingested asset saved to ./workspace/downloads/$filename)"
               fi
             done
@@ -96,10 +150,35 @@ jobs:
 
       - name: Ask Hermes Agent
         env:
+          HERMES_PROVIDER: "openai"
+          HERMES_MODEL: "gemini-3.5-flash-lite"
           OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
           OPENAI_API_KEY: "dummy-token"
+          GITHUB_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
+          HERMES_YOLO: "true"
+          HERMES_AUTO_CREATE_SKILLS: "true"
+          HERMES_REDIS_URL: "redis://localhost:6379"
+          HERMES_MAX_TOKEN_BUDGET: "100000"
+          HERMES_HUMAN_IN_THE_LOOP: "false"
+          STEALTH_BROWSER_MODE: "true"
         run: |
-          hermes chat -q "$QUESTION" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee ask_execution.log || echo "Execution complete."
+          PROMPT="[User Context: $ACTIVE_USER_ID] $QUESTION"
+
+          if command -v hermes &> /dev/null; then
+            hermes chat -q "$PROMPT" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee ask_execution.log
+          elif [ -f "$HOME/.local/bin/hermes" ]; then
+            $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee ask_execution.log
+          else
+            python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model gemini-3.5-flash-lite 2>&1 | tee ask_execution.log || echo "Execution complete."
+          fi
+
+      - name: Mask Sensitive Tokens in Output Logs
+        if: ${{ always() }}
+        run: |
+          if [ -f "ask_execution.log" ]; then
+            sed -i -E 's/(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]{32,})/[MASKED_SECRET]/g' ask_execution.log
+          fi
 
       - name: Reply to Issue or PR
         if: ${{ always() && github.event_name == 'issue_comment' }}
@@ -116,5 +195,29 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `💬 **Hermes Agent Answer:**\n\n\`\`\`text\n${output}\n\`\`\``
+              body: `💬 **Hermes Agent Answer:**\n*User Context:* \`${process.env.ACTIVE_USER_ID}\`\n\n\`\`\`text\n${output}\n\`\`\``
             });
+
+      - name: Commit Auto-Synthesized Skills & Persistent User Memory/Files
+        if: ${{ always() }}
+        run: |
+          USER_DIR="./.hermes/users/$ACTIVE_USER_ID"
+          mkdir -p "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
+          
+          cp -r $HOME/.hermes/skills/* "$USER_DIR/skills/" 2>/dev/null || true
+          cp -r $HOME/.hermes/memory/* "$USER_DIR/memory/" 2>/dev/null || true
+
+          git config --global user.name "Hermes Agent"
+          git config --global user.email "hermes-agent@users.noreply.github.com"
+          
+          git fetch origin
+          git checkout ${{ env.HEAD_REF || github.ref_name }}
+          git pull --rebase origin ${{ env.HEAD_REF || github.ref_name }} || true
+
+          git add .hermes/
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(hermes): update persistent user memory & files for '$ACTIVE_USER_ID' [skip ci]"
+            git push origin ${{ env.HEAD_REF || github.ref_name }}
+          else
+            echo "No changes to user memory or persistent files."
+          fi
