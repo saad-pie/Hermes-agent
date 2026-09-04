@@ -19,7 +19,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
   issues: write
   pull-requests: write
 
@@ -200,9 +200,10 @@ jobs:
               body: `💬 **Hermes Agent Answer:**\n*User Context:* \`${process.env.ACTIVE_USER_ID}\`\n\n\`\`\`text\n${output}\n\`\`\``
             });
 
-      - name: Commit Auto-Synthesized Skills & Persistent User Memory/Files
+      - name: Commit Auto-Synthesized Skills, Persistent Memory & Generated Artifacts
         if: ${{ always() }}
         run: |
+          set +e
           USER_DIR="./.hermes/users/$ACTIVE_USER_ID"
           mkdir -p "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
           
@@ -216,10 +217,11 @@ jobs:
           git checkout ${{ env.HEAD_REF || github.ref_name }}
           git pull --rebase origin ${{ env.HEAD_REF || github.ref_name }} || true
 
-          git add .hermes/
+          git add .hermes/ workspace/ *.md *.pdf *.txt 2>/dev/null || true
           if ! git diff --cached --quiet; then
-            git commit -m "chore(hermes): update persistent user memory & files for '$ACTIVE_USER_ID' [skip ci]"
+            git commit -m "chore(hermes): update persistent user memory & generated files for '$ACTIVE_USER_ID' [skip ci]"
             git push origin ${{ env.HEAD_REF || github.ref_name }}
           else
             echo "No changes to user memory or persistent files."
           fi
+          exit 0
