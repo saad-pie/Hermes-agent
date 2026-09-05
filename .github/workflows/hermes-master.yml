@@ -83,7 +83,7 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "$HOME/.hermes/bin" >> $GITHUB_PATH
 
-      - name: Fetch Models & Auto-Select Active Model
+      - name: Fetch Models & Pre-flight Health Check
         id: fetch_models
         env:
           INPUT_MODEL: ${{ inputs.model }}
@@ -93,7 +93,7 @@ jobs:
           echo "$MODELS_JSON" > /tmp/available_models.json
 
           ACTIVE_MODELS=$(echo "$MODELS_JSON" | jq -r '.data[] | select(.rpm > 0 and .rpd > 0) | .id')
-          echo "Active available models:"
+          echo "Active models reported by proxy:"
           echo "$ACTIVE_MODELS"
 
           TARGET_MODEL=""
@@ -106,16 +106,48 @@ jobs:
             fi
           fi
 
-          if [ -z "$TARGET_MODEL" ] || ! echo "$ACTIVE_MODELS" | grep -q "^${TARGET_MODEL}$"; then
-            if echo "$ACTIVE_MODELS" | grep -q "^gemini-3.1-flash-lite$"; then
-              TARGET_MODEL="gemini-3.1-flash-lite"
+          test_model () {
+            local m="$1"
+            local res
+            res=$(curl -s -w "%{http_code}" -X POST "https://antigravity-seven-delta.vercel.app/v1/chat/completions" \
+              -H "Content-Type: application/json" \
+              -d "{\"model\": \"$m\", \"messages\": [{\"role\": \"user\", \"content\": \"ping\"}]}" -o /dev/null)
+            if [ "$res" -eq 200 ]; then
+              return 0
             else
-              TARGET_MODEL=$(echo "$ACTIVE_MODELS" | head -n 1)
+              return 1
+            fi
+          }
+
+          SELECTED=""
+          if [ -n "$TARGET_MODEL" ] && echo "$ACTIVE_MODELS" | grep -q "^${TARGET_MODEL}$"; then
+            echo "Testing requested model $TARGET_MODEL..."
+            if test_model "$TARGET_MODEL"; then
+              SELECTED="$TARGET_MODEL"
+            else
+              echo "Requested model $TARGET_MODEL failed pre-flight health check (rate-limited/error). Falling back..."
             fi
           fi
 
-          echo "SELECTED_MODEL=$TARGET_MODEL" >> $GITHUB_ENV
-          echo "Selected Active Model: $TARGET_MODEL"
+          if [ -z "$SELECTED" ]; then
+            PREFERRED_LIST="gemini-3.1-flash-lite gemini-2.5-flash gemini-3.5-flash gemma-4-31b-it"
+            for candidate in $PREFERRED_LIST; do
+              if echo "$ACTIVE_MODELS" | grep -q "^${candidate}$"; then
+                echo "Testing candidate model $candidate..."
+                if test_model "$candidate"; then
+                  SELECTED="$candidate"
+                  break
+                fi
+              fi
+            done
+          fi
+
+          if [ -z "$SELECTED" ]; then
+            SELECTED=$(echo "$ACTIVE_MODELS" | head -n 1)
+          fi
+
+          echo "SELECTED_MODEL=$SELECTED" >> $GITHUB_ENV
+          echo "Final Selected Active Model: $SELECTED"
 
       - name: Configure Hermes Provider Config for SteveAI
         run: |
@@ -198,6 +230,8 @@ jobs:
           HERMES_MAX_TOKEN_BUDGET: "100000"
           HERMES_HUMAN_IN_THE_LOOP: "false"
           STEALTH_BROWSER_MODE: "true"
+          HERMES_MAX_RETRIES: "8"
+          HERMES_RETRY_DELAY: "5"
         run: |
           PROMPT="[User Context: $ACTIVE_USER_ID] $GOAL"
 
