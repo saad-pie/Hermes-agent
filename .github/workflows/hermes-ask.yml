@@ -9,6 +9,23 @@ on:
         description: "Question or Prompt for Hermes Agent"
         required: true
         type: string
+      model:
+        description: "Select target AI model capability"
+        required: false
+        default: "gemini-3.1-flash-lite"
+        type: choice
+        options:
+          - "gemini-3.1-flash-lite"
+          - "gemini-3.5-flash"
+          - "gemini-3.6-flash"
+          - "gemini-3.7-flash"
+          - "gemini-3.8-flash"
+          - "gemini-2.5-flash"
+          - "gemini-2.5-flash-lite"
+          - "gemini-3-flash-preview"
+          - "gemini-3.1-flash-lite-preview"
+          - "gemma-4-31b-it"
+          - "gemma-4-26b-a4b-it"
       user_id:
         description: "Firebase UID or User Identifier for Isolated Memory"
         required: false
@@ -72,12 +89,30 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "$HOME/.hermes/bin" >> $GITHUB_PATH
 
+      - name: Resolve Target Model Selection
+        id: resolve_model
+        env:
+          INPUT_MODEL: ${{ inputs.model }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          TARGET_MODEL="gemini-3.1-flash-lite"
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "$INPUT_MODEL" ]; then
+            TARGET_MODEL="$INPUT_MODEL"
+          elif [ "${{ github.event_name }}" == "issue_comment" ]; then
+            EXTRACTED_MODEL=$(echo "$COMMENT_BODY" | grep -oE '--model[ =][a-zA-Z0-9.-]+' | awk '{print $2}' || true)
+            if [ -n "$EXTRACTED_MODEL" ]; then
+              TARGET_MODEL="$EXTRACTED_MODEL"
+            fi
+          fi
+          echo "SELECTED_MODEL=$TARGET_MODEL" >> $GITHUB_ENV
+          echo "Selected Model: $TARGET_MODEL"
+
       - name: Configure Hermes Provider
         run: |
           mkdir -p $HOME/.hermes
-          cat << 'CONFIG' > $HOME/.hermes/config.yaml
+          cat << CONFIG > $HOME/.hermes/config.yaml
           provider: openai
-          model: gemini-3.1-flash-lite
+          model: ${{ env.SELECTED_MODEL }}
           stream: true
           providers:
             openai:
@@ -132,7 +167,7 @@ jobs:
               QUESTION="$QUESTION (Ingested file downloaded to ./workspace/downloads/$filename)"
             fi
           else
-            QUESTION=$(echo "$COMMENT_BODY" | sed 's/\/ask//g' | xargs)
+            QUESTION=$(echo "$COMMENT_BODY" | sed 's/\/ask//g' | sed -E 's/--model[ =][a-zA-Z0-9.-]+//g' | xargs)
             URLS=$(echo "$COMMENT_BODY" | grep -oE 'https://[^\s\)]+' || true)
             for url in $URLS; do
               filename=$(basename "$url" | cut -d? -f1)
@@ -152,7 +187,7 @@ jobs:
       - name: Ask Hermes Agent
         env:
           HERMES_PROVIDER: "openai"
-          HERMES_MODEL: "gemini-3.1-flash-lite"
+          HERMES_MODEL: ${{ env.SELECTED_MODEL }}
           HERMES_STREAM: "true"
           OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
           OPENAI_API_KEY: "dummy-token"
@@ -168,11 +203,11 @@ jobs:
           PROMPT="[User Context: $ACTIVE_USER_ID] $QUESTION"
 
           if command -v hermes &> /dev/null; then
-            hermes chat -q "$PROMPT" --provider openai --model gemini-3.1-flash-lite 2>&1 | tee ask_execution.log
+            hermes chat -q "$PROMPT" --provider openai --model "${SELECTED_MODEL}" 2>&1 | tee ask_execution.log
           elif [ -f "$HOME/.local/bin/hermes" ]; then
-            $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model gemini-3.1-flash-lite 2>&1 | tee ask_execution.log
+            $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model "${SELECTED_MODEL}" 2>&1 | tee ask_execution.log
           else
-            python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model gemini-3.1-flash-lite 2>&1 | tee ask_execution.log || echo "Execution complete."
+            python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${SELECTED_MODEL}" 2>&1 | tee ask_execution.log || echo "Execution complete."
           fi
 
       - name: Mask Sensitive Tokens in Output Logs
@@ -197,7 +232,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `💬 **Hermes Agent Answer:**\n*User Context:* \`${process.env.ACTIVE_USER_ID}\`\n\n\`\`\`text\n${output}\n\`\`\``
+              body: `💬 **Hermes Agent Answer:**\n*User Context:* \`${process.env.ACTIVE_USER_ID}\` | *Model:* \`${process.env.SELECTED_MODEL}\`\n\n\`\`\`text\n${output}\n\`\`\``
             });
 
       - name: Commit Auto-Synthesized Skills, Persistent Memory & Generated Artifacts
