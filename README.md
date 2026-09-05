@@ -43,7 +43,7 @@ Hermes Agent is designed as a headless backend for web applications. You can tri
 1. Triggering an Agent Run (POST)
 Trigger a workflow run from your web server or edge function using @octokit/rest or fetch:
 
-```python
+```typescript
 import { Octokit } from "@octokit/rest";
 
 const octokit = new Octokit({ auth: process.env.GITHUB_PAT });
@@ -75,7 +75,7 @@ export async function triggerHermesAgent({ question, userId, model = "gemini-3.1
 2. Live Agent Streaming & Artifact Retrieval
 Stream tool usage, terminal output, and final agent answers in real-time on your frontend console component:
 
-```js
+```typescript
 /**
  * Polls GitHub Actions workflow artifacts and fetches the live ask_execution.log output stream.
  */
@@ -103,7 +103,7 @@ Instead of polling, configure a GitHub Webhook on your repo pointing to your web
 
 Handle workflow events in your Next.js / Express API route:
 
-```js
+```typescript
 import { NextApiRequest, NextApiResponse } from "next";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -128,6 +128,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 4. Direct Terminal Log Extraction via GitHub Jobs API
 Extract execution steps line-by-line using job log endpoints:
 
+```typescript
 export async function fetchJobLogs(runId: number, githubToken: string): Promise<string> {
   // Get job ID from workflow run
   const jobsRes = await fetch(`[https://api.github.com/repos/saad-pie/Hermes-agent/actions/runs/$](https://api.github.com/repos/saad-pie/Hermes-agent/actions/runs/$){runId}/jobs`, {
@@ -148,27 +149,37 @@ export async function fetchJobLogs(runId: number, githubToken: string): Promise<
   // Clean GitHub Runner timestamp prefixes
   return rawLogs.replace(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z /gm, "");
 }
-🛠️ CLI Usage (GitHub Comments)
+```
+
+## 🛠️ CLI Usage (GitHub Comments)
 Trigger the agent directly on pull requests or issues by commenting with /ask:
 
-/ask --model gemini-3.1-flash-lite Perform code review on the latest commit and check for security vulnerabilities.
-⚙️ CI/CD & GitHub Actions Workflows
+```bash
+/ask --model gemini-3.1-flash-lite Perform
+code review on the latest commit and check for security vulnerabilities.
+```
+
+## ⚙️ CI/CD & GitHub Actions Workflows
 Hermes Agent leverages two primary GitHub Actions workflows to power headless execution and automated agent DAG orchestrations:
 
-hermes-ask.yml
+
+**hermes-ask.yml**
 Handles on-demand trigger events coming from HTTP dispatch events or issue comments.
 
-Triggers: repository_dispatch (type: hermes_request), issue_comment (/ask).
-Artifact Output: Produces hermes-execution-log containing raw terminal output and execution metadata.
-hermes-master.yml
+*Triggers*: repository_dispatch (type: hermes_request), issue_comment (/ask).
+*Artifact Output*: Produces hermes-execution-log containing raw terminal output and execution metadata.
+
+**hermes-master.yml**
 Orchestrates complex, multi-step agent autonomous execution directed by skill DAGs.
 
-Triggers: Scheduled cron triggers or manually via workflow_dispatch.
-State Management: Pulls latest state from .hermes/users/{user_id}/ and commits updated memory graphs post-run.
-🔒 Security & Policy
-Environment Isolation: All terminal execution runs within ephemeral Ubuntu runners.
-Secret Masking: Automatic log sanitization masks GitHub PATs and API keys before output generation.
-Rate Limits: Automatic endpoint probing prevents quota exhaustion during high token-density loops.
-📜 License
-Distributed under the MIT License. Developed by Saadpie.
+*Triggers*: Scheduled cron triggers or manually via workflow_dispatch.
+*State Management*: Pulls latest state from .hermes/users/{user_id}/ and commits updated memory graphs post-run.
+
+## 🔒 Security & Policy
+*Environment Isolation*: All terminal execution runs within ephemeral Ubuntu runners.
+*Secret Masking*: Automatic log sanitization masks GitHub PATs and API keys before output generation.
+*Rate Limits*: Automatic endpoint probing prevents quota exhaustion during high token-density loops.
+
+## 📜 License
+Distributed under the MIT License. Developed by **Saadpie**.
 
