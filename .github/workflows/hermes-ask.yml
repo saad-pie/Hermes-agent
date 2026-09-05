@@ -82,16 +82,13 @@ jobs:
           INPUT_MODEL: ${{ inputs.model }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          # Fetch dynamic model catalog
           MODELS_JSON=$(curl -s "https://antigravity-seven-delta.vercel.app/api/models")
           echo "$MODELS_JSON" > /tmp/available_models.json
 
-          # Filter active models where rpm > 0 and rpd > 0
           ACTIVE_MODELS=$(echo "$MODELS_JSON" | jq -r '.data[] | select(.rpm > 0 and .rpd > 0) | .id')
           echo "Active available models:"
           echo "$ACTIVE_MODELS"
 
-          # Determine target model preference
           TARGET_MODEL=""
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "$INPUT_MODEL" ]; then
             TARGET_MODEL="$INPUT_MODEL"
@@ -102,7 +99,6 @@ jobs:
             fi
           fi
 
-          # Fallback mechanism if no explicit model or selected model is inactive
           if [ -z "$TARGET_MODEL" ] || ! echo "$ACTIVE_MODELS" | grep -q "^${TARGET_MODEL}$"; then
             if echo "$ACTIVE_MODELS" | grep -q "^gemini-3.1-flash-lite$"; then
               TARGET_MODEL="gemini-3.1-flash-lite"
@@ -123,7 +119,7 @@ jobs:
           stream: true
           providers:
             openai:
-              base_url: https://antigravity-seven-delta.vercel.app/api
+              base_url: https://antigravity-seven-delta.vercel.app/v1
               api_key: dummy-token
           CONFIG
 
@@ -190,7 +186,7 @@ jobs:
           HERMES_PROVIDER: "openai"
           HERMES_MODEL: ${{ env.SELECTED_MODEL }}
           HERMES_STREAM: "true"
-          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/api"
+          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
           OPENAI_API_KEY: "dummy-token"
           GITHUB_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
@@ -204,11 +200,11 @@ jobs:
           PROMPT="[User Context: $ACTIVE_USER_ID] $QUESTION"
 
           if command -v hermes &> /dev/null; then
-            hermes chat -q "$PROMPT" --provider openai --model "${SELECTED_MODEL}" 2>&1 | tee ask_execution.log
+            hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log
           elif [ -f "$HOME/.local/bin/hermes" ]; then
-            $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model "${SELECTED_MODEL}" 2>&1 | tee ask_execution.log
+            $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log
           else
-            python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${SELECTED_MODEL}" 2>&1 | tee ask_execution.log || echo "Execution completed."
+            python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log || echo "Execution completed."
           fi
 
       - name: Sanitize Output Logs
