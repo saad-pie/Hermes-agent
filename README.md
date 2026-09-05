@@ -155,8 +155,7 @@ export async function fetchJobLogs(runId: number, githubToken: string): Promise<
 Trigger the agent directly on pull requests or issues by commenting with /ask:
 
 ```bash
-/ask --model gemini-3.1-flash-lite Perform
-code review on the latest commit and check for security vulnerabilities.
+/ask --model gemini-3.1-flash-lite Perform code review on the latest commit and check for security vulnerabilities.
 ```
 
 ## ⚙️ CI/CD & GitHub Actions Workflows
