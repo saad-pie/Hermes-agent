@@ -2,6 +2,11 @@ name: Hermes Master DAGI Autonomous OS Workflow
 
 on:
   workflow_dispatch:
+    inputs:
+      model:
+        description: "Optional custom model override (e.g. gemini-3.5-flash)"
+        required: false
+        type: string
   issue_comment:
     types: [created]
   schedule:
@@ -78,16 +83,54 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "$HOME/.hermes/bin" >> $GITHUB_PATH
 
+      - name: Fetch Models & Auto-Select Active Model
+        id: fetch_models
+        env:
+          INPUT_MODEL: ${{ inputs.model }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          # Fetch dynamic model catalog
+          MODELS_JSON=$(curl -s "https://antigravity-seven-delta.vercel.app/api/models")
+          echo "$MODELS_JSON" > /tmp/available_models.json
+
+          # Filter active models where rpm > 0 and rpd > 0
+          ACTIVE_MODELS=$(echo "$MODELS_JSON" | jq -r '.data[] | select(.rpm > 0 and .rpd > 0) | .id')
+          echo "Active available models:"
+          echo "$ACTIVE_MODELS"
+
+          # Determine target model preference
+          TARGET_MODEL=""
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "$INPUT_MODEL" ]; then
+            TARGET_MODEL="$INPUT_MODEL"
+          elif [ "${{ github.event_name }}" == "issue_comment" ]; then
+            EXTRACTED_MODEL=$(echo "$COMMENT_BODY" | grep -oE '--model[ =][a-zA-Z0-9.-]+' | awk '{print $2}' || true)
+            if [ -n "$EXTRACTED_MODEL" ]; then
+              TARGET_MODEL="$EXTRACTED_MODEL"
+            fi
+          fi
+
+          # Fallback mechanism if no explicit model or selected model is inactive (rpm=0 / rpd=0)
+          if [ -z "$TARGET_MODEL" ] || ! echo "$ACTIVE_MODELS" | grep -q "^${TARGET_MODEL}$"; then
+            if echo "$ACTIVE_MODELS" | grep -q "^gemini-3.1-flash-lite$"; then
+              TARGET_MODEL="gemini-3.1-flash-lite"
+            else
+              TARGET_MODEL=$(echo "$ACTIVE_MODELS" | head -n 1)
+            fi
+          fi
+
+          echo "SELECTED_MODEL=$TARGET_MODEL" >> $GITHUB_ENV
+          echo "Selected Active Model: $TARGET_MODEL"
+
       - name: Configure Hermes Provider Config for SteveAI
         run: |
           mkdir -p $HOME/.hermes
-          cat << 'CONFIG' > $HOME/.hermes/config.yaml
+          cat << CONFIG > $HOME/.hermes/config.yaml
           provider: openai
-          model: gemini-3.1-flash-lite
+          model: ${{ env.SELECTED_MODEL }}
           stream: true
           providers:
             openai:
-              base_url: https://antigravity-seven-delta.vercel.app/v1
+              base_url: https://antigravity-seven-delta.vercel.app/api
               api_key: dummy-token
           CONFIG
 
@@ -126,7 +169,7 @@ jobs:
           if [ "${{ github.event_name }}" == "schedule" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             GOAL="Run automated Hermes Cron system maintenance, security audit, and documentation drift checks."
           else
-            GOAL=$(echo "$COMMENT_BODY" | sed 's/\/hermes//g' | xargs)
+            GOAL=$(echo "$COMMENT_BODY" | sed 's/\/hermes//g' | sed -E 's/--model[ =][a-zA-Z0-9.-]+//g' | xargs)
             
             URLS=$(echo "$COMMENT_BODY" | grep -oE 'https://[^\s\)]+' || true)
             for url in $URLS; do
@@ -147,9 +190,9 @@ jobs:
       - name: Run Autonomous Hermes DAGI Master Engine
         env:
           HERMES_PROVIDER: "openai"
-          HERMES_MODEL: "gemini-3.1-flash-lite"
+          HERMES_MODEL: ${{ env.SELECTED_MODEL }}
           HERMES_STREAM: "true"
-          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
+          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/api"
           OPENAI_API_KEY: "dummy-token"
           GITHUB_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
@@ -163,11 +206,11 @@ jobs:
           PROMPT="[User Context: $ACTIVE_USER_ID] $GOAL"
 
           if command -v hermes &> /dev/null; then
-            hermes chat -q "$PROMPT" --provider openai --model gemini-3.1-flash-lite 2>&1 | tee hermes_execution.log
+            hermes chat -q "$PROMPT" --provider openai --model "${SELECTED_MODEL}" 2>&1 | tee hermes_execution.log
           elif [ -f "$HOME/.local/bin/hermes" ]; then
-            $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model gemini-3.1-flash-lite 2>&1 | tee hermes_execution.log
+            $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model "${SELECTED_MODEL}" 2>&1 | tee hermes_execution.log
           else
-            python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model gemini-3.1-flash-lite 2>&1 | tee hermes_execution.log || echo "Hermes execution complete."
+            python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${SELECTED_MODEL}" 2>&1 | tee hermes_execution.log || echo "Hermes execution complete."
           fi
 
       - name: Mask Sensitive Tokens in Output Logs
@@ -192,12 +235,13 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `🚀 **Hermes DAGI Autonomous OS Agent Report**\n*User Context:* \`${process.env.ACTIVE_USER_ID}\`\n\n\`\`\`text\n${output}\n\`\`\``
+              body: `🚀 **Hermes DAGI Autonomous OS Agent Report**\n*User Context:* \`${process.env.ACTIVE_USER_ID}\` | *Active Endpoint Model:* \`${process.env.SELECTED_MODEL}\`\n\n\`\`\`text\n${output}\n\`\`\``
             });
 
       - name: Commit Auto-Synthesized Skills & Persistent User Memory/Files
         if: ${{ always() }}
         run: |
+          set +e
           USER_DIR="./.hermes/users/$ACTIVE_USER_ID"
           mkdir -p "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
           
@@ -211,13 +255,14 @@ jobs:
           git checkout ${{ env.HEAD_REF || github.ref_name }}
           git pull --rebase origin ${{ env.HEAD_REF || github.ref_name }} || true
 
-          git add .hermes/
+          git add .hermes/ workspace/ *.md *.pdf *.txt 2>/dev/null || true
           if ! git diff --cached --quiet; then
             git commit -m "chore(hermes): save persistent user memory & files for '$ACTIVE_USER_ID' [skip ci]"
             git push origin ${{ env.HEAD_REF || github.ref_name }}
           else
             echo "No changes to user memory or persistent files."
           fi
+          exit 0
 
       - name: Cache Complete Environment State for Hermes Ask
         if: ${{ always() }}
