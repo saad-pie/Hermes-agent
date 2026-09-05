@@ -19,6 +19,10 @@ permissions:
   actions: write
   checks: write
 
+concurrency:
+  group: hermes-master-sync-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   hermes-dagi-core:
     if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') || (contains(github.event.comment.body, '/hermes') && !github.event.comment.user.bot) }}
@@ -363,17 +367,24 @@ jobs:
 
           git fetch origin
           git checkout "$TARGET_BRANCH" || git checkout -b "$TARGET_BRANCH"
-          git pull --rebase origin "$TARGET_BRANCH" || true
+          
+          for i in {1..5}; do
+            git pull --rebase origin "$TARGET_BRANCH" || true
+            git add .
+            git reset ask_execution.log hermes_execution.log agent_response.json 2>/dev/null || true
 
-          git add .
-          git reset ask_execution.log hermes_execution.log agent_response.json 2>/dev/null || true
+            if git diff --cached --quiet; then
+              echo "No state changes to commit."
+              break
+            fi
 
-          if ! git diff --cached --quiet; then
             git commit -m "chore(hermes): save persistent user memory & files for '$ACTIVE_USER_ID' [skip ci]"
-            git push origin "$TARGET_BRANCH"
-          else
-            echo "No changes to user memory or persistent files."
-          fi
+            if git push origin "$TARGET_BRANCH"; then
+              echo "State committed successfully!"
+              break
+            fi
+            sleep $((RANDOM % 3 + 1))
+          done
           exit 0
 
       - name: Cache Complete Environment State for Hermes Ask
@@ -386,4 +397,4 @@ jobs:
             ~/.cache/ms-playwright
             ~/.local/bin
             ~/.hermes
-          key: hermes-dagi-master-cache-v1
+          key: hermes-dagi-master-cache-${{ runner.os }}-${{ github.run_id }}
