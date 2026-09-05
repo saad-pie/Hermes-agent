@@ -63,18 +63,18 @@ jobs:
           HEAD_REF=$(echo "$PR_JSON" | jq -r .head.ref)
           echo "HEAD_REF=$HEAD_REF" >> $GITHUB_ENV
 
-      - name: Checkout Workspace
+      - name: Fast Checkout Workspace
         uses: actions/checkout@v4
         with:
           ref: ${{ env.HEAD_REF || github.ref }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Set up Python Runtime
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Restore Pre-Built Hermes Cache
+      - name: Restore Pre-Built Environment from Master Cache
         uses: actions/cache/restore@v4
         id: restore-master-cache
         with:
@@ -84,16 +84,17 @@ jobs:
             ~/.cache/ms-playwright
             ~/.local/bin
             ~/.hermes
-          key: hermes-dagi-cache-${{ runner.os }}-${{ github.run_id }}
+          key: hermes-dagi-master-cache-v1
           restore-keys: |
-            hermes-dagi-cache-${{ runner.os }}-
+            hermes-dagi-master-cache-
+            hermes-dagi-cache-
 
       - name: Export Executable Paths
         run: |
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "$HOME/.hermes/bin" >> $GITHUB_PATH
 
-      - name: Fetch Models & Auto-Select Active Model
+      - name: Fast Active Model Resolution
         id: fetch_models
         env:
           DISPATCH_MODEL: ${{ github.event.client_payload.model }}
@@ -101,11 +102,7 @@ jobs:
           RAW_COMMENT: ${{ github.event.comment.body }}
         run: |
           MODELS_JSON=$(curl -s "https://antigravity-seven-delta.vercel.app/api/models")
-          echo "$MODELS_JSON" > /tmp/available_models.json
-
           ACTIVE_MODELS=$(echo "$MODELS_JSON" | jq -r '.data[] | select(.rpm > 0 and .rpd > 0) | .id')
-          echo "Active available models:"
-          echo "$ACTIVE_MODELS"
 
           TARGET_MODEL=""
           if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
@@ -128,9 +125,8 @@ jobs:
           fi
 
           echo "SELECTED_MODEL=$TARGET_MODEL" >> $GITHUB_ENV
-          echo "Selected Model: $TARGET_MODEL"
 
-      - name: Configure Hermes Endpoint Binding
+      - name: Configure Hermes Binding
         run: |
           mkdir -p $HOME/.hermes
           cat << CONFIG > $HOME/.hermes/config.yaml
@@ -245,7 +241,7 @@ jobs:
           echo "$QUESTION" >> $GITHUB_ENV
           echo "$EOF_MARKER" >> $GITHUB_ENV
 
-      - name: Execute Hermes Chat Engine
+      - name: Execute Hermes Engine
         env:
           HERMES_PROVIDER: "openai"
           HERMES_MODEL: ${{ env.SELECTED_MODEL }}
@@ -271,7 +267,7 @@ jobs:
             python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log || echo "Execution completed."
           fi
 
-      - name: Secure Output-Only Attachment Parser & JSON Builder
+      - name: Secure Attachment Parser & JSON Builder
         if: ${{ always() }}
         run: |
           if [ -f "ask_execution.log" ]; then
@@ -387,7 +383,7 @@ jobs:
               body: body
             });
 
-      - name: Save Memory & Workspace Artifacts
+      - name: Save Memory & Workspace State
         if: ${{ always() }}
         run: |
           set +e
@@ -406,9 +402,8 @@ jobs:
           fi
 
           git fetch origin
-          git checkout "$TARGET_BRANCH" || git checkout -b "$TARGET_BRANCH"
+          git checkout "$TARGET_BRANCH" \vert{}\vert{} git checkout -b "$TARGET_BRANCH"
           
-          # Retry loop for seamless concurrent pushes
           for i in {1..5}; do
             git pull --rebase origin "$TARGET_BRANCH" || true
             git add .
@@ -424,19 +419,6 @@ jobs:
               echo "State committed successfully!"
               break
             fi
-            echo "Push race detected, retrying ($i/5)..."
             sleep $((RANDOM % 3 + 1))
           done
           exit 0
-
-      - name: Save Updated Hermes Cache
-        if: ${{ always() }}
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            /opt/hostedtoolcache/Python/3.11.*/x64
-            ~/.cache/pip
-            ~/.cache/ms-playwright
-            ~/.local/bin
-            ~/.hermes
-          key: hermes-dagi-cache-${{ runner.os }}-${{ github.run_id }}
