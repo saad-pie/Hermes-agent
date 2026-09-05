@@ -84,10 +84,10 @@ jobs:
             ~/.cache/ms-playwright
             ~/.local/bin
             ~/.hermes
-          key: hermes-dagi-master-cache-v1
+          key: hermes-dagi-master-cache-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            hermes-dagi-master-cache-
-            hermes-dagi-cache-
+            hermes-dagi-master-cache-${{ runner.os }}-
+            hermes-dagi-cache-${{ runner.os }}-
 
       - name: Export Executable Paths
         run: |
