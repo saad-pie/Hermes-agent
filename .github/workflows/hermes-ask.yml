@@ -1,6 +1,8 @@
 name: Hermes Ask Agent
 
 on:
+  repository_dispatch:
+    types: [hermes_request]
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -26,10 +28,11 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
+  actions: read
 
 jobs:
   hermes-ask:
-    if: ${{ (github.event_name == 'workflow_dispatch') || (contains(github.event.comment.body, '/ask') && !github.event.comment.user.bot) }}
+    if: ${{ (github.event_name == 'repository_dispatch') || (github.event_name == 'workflow_dispatch') || (contains(github.event.comment.body, '/ask') && !github.event.comment.user.bot) }}
     runs-on: ubuntu-latest
 
     services:
@@ -78,9 +81,6 @@ jobs:
 
       - name: Fetch Models & Auto-Select Active Model
         id: fetch_models
-        env:
-          INPUT_MODEL: ${{ inputs.model }}
-          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           MODELS_JSON=$(curl -s "https://antigravity-seven-delta.vercel.app/api/models")
           echo "$MODELS_JSON" > /tmp/available_models.json
@@ -90,10 +90,12 @@ jobs:
           echo "$ACTIVE_MODELS"
 
           TARGET_MODEL=""
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "$INPUT_MODEL" ]; then
-            TARGET_MODEL="$INPUT_MODEL"
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            TARGET_MODEL='${{ github.event.client_payload.model }}'
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TARGET_MODEL='${{ inputs.model }}'
           elif [ "${{ github.event_name }}" == "issue_comment" ]; then
-            EXTRACTED_MODEL=$(echo "$COMMENT_BODY" | grep -oE '--model[ =][a-zA-Z0-9.-]+' | awk '{print $2}' || true)
+            EXTRACTED_MODEL=$(echo '${{ github.event.comment.body }}' | grep -oE '--model[ =][a-zA-Z0-9.-]+' | awk '{print $2}' || true)
             if [ -n "$EXTRACTED_MODEL" ]; then
               TARGET_MODEL="$EXTRACTED_MODEL"
             fi
@@ -125,14 +127,15 @@ jobs:
 
       - name: Resolve User Context & Restore Memory
         run: |
-          if [ "${{ github.event_name }}" == "issue_comment" ]; then
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            USER_ID='${{ github.event.client_payload.user_id }}'
+          elif [ "${{ github.event_name }}" == "issue_comment" ]; then
             USER_ID="${{ github.event.comment.user.login }}"
           elif [ -n "${{ inputs.user_id }}" ]; then
             USER_ID="${{ inputs.user_id }}"
-          else
-            USER_ID="dispatch_user"
           fi
 
+          [ -z "$USER_ID" ] && USER_ID="public_user"
           USER_ID=$(echo "$USER_ID" | sed 's/[^a-zA-Z0-9_-]/_/g')
           echo "ACTIVE_USER_ID=$USER_ID" >> $GITHUB_ENV
 
@@ -145,17 +148,23 @@ jobs:
 
       - name: Resolve Question & Download Attachments
         id: parse_question
-        env:
-          INPUT_QUESTION: ${{ inputs.question }}
-          INPUT_FILE_URL: ${{ inputs.file_url }}
-          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           USER_FILES="./.hermes/users/$ACTIVE_USER_ID/files"
           mkdir -p ./workspace/downloads "$USER_FILES"
 
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            QUESTION="$INPUT_QUESTION"
-            FILE_URL="$INPUT_FILE_URL"
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            QUESTION='${{ github.event.client_payload.question }}'
+            FILE_URL='${{ github.event.client_payload.file_url }}'
+            if [ -n "$FILE_URL" ]; then
+              filename=$(basename "$FILE_URL" | cut -d? -f1)
+              [ -z "$filename" ] && filename="uploaded_asset"
+              curl -sL "$FILE_URL" -o "./workspace/downloads/$filename"
+              cp "./workspace/downloads/$filename" "$USER_FILES/"
+              QUESTION="$QUESTION (Ingested file downloaded to ./workspace/downloads/$filename)"
+            fi
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            QUESTION='${{ inputs.question }}'
+            FILE_URL='${{ inputs.file_url }}'
             if [ -n "$FILE_URL" ]; then
               filename=$(basename "$FILE_URL" | cut -d? -f1)
               [ -z "$filename" ] && filename="uploaded_asset"
@@ -164,6 +173,7 @@ jobs:
               QUESTION="$QUESTION (Ingested file downloaded to ./workspace/downloads/$filename)"
             fi
           else
+            COMMENT_BODY='${{ github.event.comment.body }}'
             QUESTION=$(echo "$COMMENT_BODY" | sed 's/\/ask//g' | sed -E 's/--model[ =][a-zA-Z0-9.-]+//g' | xargs)
             URLS=$(echo "$COMMENT_BODY" | grep -oE 'https://[^\s\)]+' || true)
             for url in $URLS; do
@@ -213,6 +223,14 @@ jobs:
           if [ -f "ask_execution.log" ]; then
             sed -i -E 's/(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]{32,})/[MASKED_SECRET]/g' ask_execution.log
           fi
+
+      - name: Upload Stream Output Artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: hermes-execution-log
+          path: ask_execution.log
+          retention-days: 1
 
       - name: Publish Comment
         if: ${{ always() && github.event_name == 'issue_comment' }}
