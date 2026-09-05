@@ -91,10 +91,14 @@ export async function streamAgentExecutionLog(runId: number, githubToken: string
 
   // 2. Download ZIP archive
   const zipRes = await fetch(artifact.archive_download_url, {
-    headers: { Authorization: `Bearer ${githubToken}` }
+    headers: { Authorization: `token ${githubToken}` }
   });
-
-  return await zipRes.text(); 
+  
+  if (!zipRes.ok) throw new Error("Failed to download artifact");
+  
+  const arrayBuffer = await zipRes.arrayBuffer();
+  // Note: Client-side would use JSZip or similar to decompress here
+  return arrayBuffer; 
 }
 ```
 
