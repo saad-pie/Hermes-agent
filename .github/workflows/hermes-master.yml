@@ -174,7 +174,7 @@ jobs:
           echo "ACTIVE_USER_ID=$USER_ID" >> $GITHUB_ENV
 
           USER_DIR="./.hermes/users/$USER_ID"
-          mkdir -p $HOME/.hermes/skills$HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
+          mkdir -p $HOME/.hermes/skills $HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
 
           if [ -d "$USER_DIR/skills" ]; then cp -r "$USER_DIR/skills/"* $HOME/.hermes/skills/ 2>/dev/null || true; fi
           if [ -d "$USER_DIR/memory" ]; then cp -r "$USER_DIR/memory/"* $HOME/.hermes/memory/ 2>/dev/null || true; fi
@@ -188,12 +188,11 @@ jobs:
           USER_FILES="./.hermes/users/$ACTIVE_USER_ID/files"
           mkdir -p ./workspace/downloads "$USER_FILES"
 
-          if [ "${{ github.event_name }}" == "schedule" ] \vert{}\vert{} [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" == "schedule" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             GOAL="Run automated Hermes Cron system maintenance, security audit, and documentation drift checks."
           else
             GOAL=$(echo "$COMMENT_BODY" | sed 's/\/hermes//g' | sed -E 's/--model[ =][a-zA-Z0-9.-]+//g' | xargs)
             
-            # Extract URLs, attachments, or file references from comment body
             URLS=$(echo "$COMMENT_BODY" | grep -oE 'https://[^\s\)]+' || true)
             for url in $URLS; do
               filename=$(basename "$url" | cut -d? -f1)
@@ -203,9 +202,8 @@ jobs:
                 GOAL="$GOAL (Ingested media asset downloaded and saved to ./workspace/downloads/$filename)"
               fi
             done
-          }
+          fi
           
-          # Handle markdown uploads or file attachments if included via GitHub UI uploads
           if [ -d "./uploads" ]; then
             cp -r ./uploads/* ./workspace/downloads/ 2>/dev/null || true
             cp -r ./uploads/* "$USER_FILES/" 2>/dev/null || true
@@ -234,7 +232,7 @@ jobs:
           HERMES_MAX_RETRIES: "8"
           HERMES_RETRY_DELAY: "5"
         run: |
-          PROMPT="[User Context: $ACTIVE_USER_ID]$GOAL. Available files in workspace/downloads: $(ls -la ./workspace/downloads 2>/dev/null || echo 'None')"
+          PROMPT="[User Context: $ACTIVE_USER_ID] $GOAL. Available files in workspace/downloads: $(ls -la ./workspace/downloads 2>/dev/null || echo 'None')"
 
           if command -v hermes &> /dev/null; then
             hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log
@@ -365,16 +363,21 @@ jobs:
           git config --global user.name "Hermes Master DAGI Agent"
           git config --global user.email "hermes-dagi@users.noreply.github.com"
           
+          TARGET_BRANCH="${{ env.HEAD_REF }}"
+          if [ -z "$TARGET_BRANCH" ]; then
+            TARGET_BRANCH="${{ github.ref_name }}"
+          fi
+
           git fetch origin
-          git checkout ${{ env.HEAD_REF || github.ref_name }}
-          git pull --rebase origin ${{ env.HEAD_REF || github.ref_name }} || true
+          git checkout "$TARGET_BRANCH" || git checkout -b "$TARGET_BRANCH"
+          git pull --rebase origin "$TARGET_BRANCH" || true
 
           git add .
           git reset ask_execution.log hermes_execution.log agent_response.json 2>/dev/null || true
 
           if ! git diff --cached --quiet; then
             git commit -m "chore(hermes): save persistent user memory & files for '$ACTIVE_USER_ID' [skip ci]"
-            git push origin ${{ env.HEAD_REF || github.ref_name }}
+            git push origin "$TARGET_BRANCH"
           else
             echo "No changes to user memory or persistent files."
           fi
