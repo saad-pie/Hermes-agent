@@ -38,6 +38,10 @@ permissions:
   pull-requests: write
   actions: read
 
+concurrency:
+  group: hermes-ask-sync-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   hermes-ask:
     if: ${{ (github.event_name == 'repository_dispatch') || (github.event_name == 'workflow_dispatch') || (contains(github.event.comment.body, '/ask') && !github.event.comment.user.bot) }}
@@ -80,7 +84,9 @@ jobs:
             ~/.cache/ms-playwright
             ~/.local/bin
             ~/.hermes
-          key: hermes-dagi-master-cache-v1
+          key: hermes-dagi-cache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            hermes-dagi-cache-${{ runner.os }}-
 
       - name: Export Executable Paths
         run: |
@@ -89,6 +95,10 @@ jobs:
 
       - name: Fetch Models & Auto-Select Active Model
         id: fetch_models
+        env:
+          DISPATCH_MODEL: ${{ github.event.client_payload.model }}
+          INPUT_MODEL: ${{ inputs.model }}
+          RAW_COMMENT: ${{ github.event.comment.body }}
         run: |
           MODELS_JSON=$(curl -s "https://antigravity-seven-delta.vercel.app/api/models")
           echo "$MODELS_JSON" > /tmp/available_models.json
@@ -99,18 +109,18 @@ jobs:
 
           TARGET_MODEL=""
           if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
-            TARGET_MODEL='${{ github.event.client_payload.model }}'
+            TARGET_MODEL="$DISPATCH_MODEL"
           elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            TARGET_MODEL='${{ inputs.model }}'
+            TARGET_MODEL="$INPUT_MODEL"
           elif [ "${{ github.event_name }}" == "issue_comment" ]; then
-            EXTRACTED_MODEL=$(echo '${{ github.event.comment.body }}' | grep -oE '--model[ =][a-zA-Z0-9.-]+' | awk '{print $2}' || true)
+            EXTRACTED_MODEL=$(echo "$RAW_COMMENT" | grep -oE '--model[ =][a-zA-Z0-9.-]+' | awk '{print $2}' || true)
             if [ -n "$EXTRACTED_MODEL" ]; then
               TARGET_MODEL="$EXTRACTED_MODEL"
             fi
           fi
 
-          if [ -z "$TARGET_MODEL" ] || ! echo "$ACTIVE_MODELS" | grep -q "^${TARGET_MODEL}$"; then
-            if echo "$ACTIVE_MODELS" | grep -q "^gemini-3.1-flash-lite$"; then
+          if [ -z "$TARGET_MODEL" ] \vert{}\vert{} ! echo "$ACTIVE_MODELS" | grep -q "^${TARGET_MODEL}$"; then
+            if echo "$ACTIVE_MODELS" \vert{} grep -q "^gemini-3.1-flash-lite$"; then
               TARGET_MODEL="gemini-3.1-flash-lite"
             else
               TARGET_MODEL=$(echo "$ACTIVE_MODELS" | head -n 1)
@@ -134,13 +144,17 @@ jobs:
           CONFIG
 
       - name: Resolve User Context & Restore Memory
+        env:
+          DISPATCH_USER: ${{ github.event.client_payload.user_id }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+          INPUT_USER: ${{ inputs.user_id }}
         run: |
           if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
-            USER_ID='${{ github.event.client_payload.user_id }}'
+            USER_ID="$DISPATCH_USER"
           elif [ "${{ github.event_name }}" == "issue_comment" ]; then
-            USER_ID="${{ github.event.comment.user.login }}"
-          elif [ -n "${{ inputs.user_id }}" ]; then
-            USER_ID="${{ inputs.user_id }}"
+            USER_ID="$COMMENT_USER"
+          elif [ -n "$INPUT_USER" ]; then
+            USER_ID="$INPUT_USER"
           fi
 
           [ -z "$USER_ID" ] && USER_ID="public_user"
@@ -148,7 +162,7 @@ jobs:
           echo "ACTIVE_USER_ID=$USER_ID" >> $GITHUB_ENV
 
           USER_DIR="./.hermes/users/$USER_ID"
-          mkdir -p $HOME/.hermes/skills $HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
+          mkdir -p $HOME/.hermes/skills$HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
 
           if [ -d "$USER_DIR/skills" ]; then cp -r "$USER_DIR/skills/"* $HOME/.hermes/skills/ 2>/dev/null || true; fi
           if [ -d "$USER_DIR/memory" ]; then cp -r "$USER_DIR/memory/"* $HOME/.hermes/memory/ 2>/dev/null || true; fi
@@ -156,18 +170,27 @@ jobs:
 
       - name: Resolve Question & Ingest File Uploads
         id: parse_question
+        env:
+          DISPATCH_Q: ${{ github.event.client_payload.question }}
+          DISPATCH_URL: ${{ github.event.client_payload.file_url }}
+          DISPATCH_B64: ${{ github.event.client_payload.file_base64 }}
+          DISPATCH_NAME: ${{ github.event.client_payload.file_name }}
+          INPUT_Q: ${{ inputs.question }}
+          INPUT_URL: ${{ inputs.file_url }}
+          INPUT_B64: ${{ inputs.file_base64 }}
+          INPUT_NAME: ${{ inputs.file_name }}
+          RAW_COMMENT: ${{ github.event.comment.body }}
         run: |
           USER_FILES="./.hermes/users/$ACTIVE_USER_ID/files"
           mkdir -p ./workspace/downloads "$USER_FILES"
 
           QUESTION=""
           
-          # 1. Handle Repository Dispatch payloads (API / Web UI uploads)
           if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
-            QUESTION='${{ github.event.client_payload.question }}'
-            FILE_URL='${{ github.event.client_payload.file_url }}'
-            FILE_BASE64='${{ github.event.client_payload.file_base64 }}'
-            FILE_NAME='${{ github.event.client_payload.file_name }}'
+            QUESTION="$DISPATCH_Q"
+            FILE_URL="$DISPATCH_URL"
+            FILE_BASE64="$DISPATCH_B64"
+            FILE_NAME="$DISPATCH_NAME"
 
             if [ -n "$FILE_URL" ]; then
               filename=$(basename "$FILE_URL" | cut -d? -f1)
@@ -178,17 +201,16 @@ jobs:
             fi
 
             if [ -n "$FILE_BASE64" ] && [ -n "$FILE_NAME" ]; then
-              echo "$FILE_BASE64" | base64 -d > "./workspace/downloads/$FILE_NAME"
+              echo "$FILE_BASE64" \vert{} base64 -d > "./workspace/downloads/$FILE_NAME"
               cp "./workspace/downloads/$FILE_NAME" "$USER_FILES/"
               QUESTION="$QUESTION (Uploaded file decoded and saved to ./workspace/downloads/$FILE_NAME)"
             fi
 
-          # 2. Handle Workflow Dispatch inputs (Manual triggers with optional file URL / Base64)
           elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            QUESTION='${{ inputs.question }}'
-            FILE_URL='${{ inputs.file_url }}'
-            FILE_BASE64='${{ inputs.file_base64 }}'
-            FILE_NAME='${{ inputs.file_name }}'
+            QUESTION="$INPUT_Q"
+            FILE_URL="$INPUT_URL"
+            FILE_BASE64="$INPUT_B64"
+            FILE_NAME="$INPUT_NAME"
 
             if [ -n "$FILE_URL" ]; then
               filename=$(basename "$FILE_URL" | cut -d? -f1)
@@ -199,17 +221,15 @@ jobs:
             fi
 
             if [ -n "$FILE_BASE64" ] && [ -n "$FILE_NAME" ]; then
-              echo "$FILE_BASE64" | base64 -d > "./workspace/downloads/$FILE_NAME"
+              echo "$FILE_BASE64" \vert{} base64 -d > "./workspace/downloads/$FILE_NAME"
               cp "./workspace/downloads/$FILE_NAME" "$USER_FILES/"
               QUESTION="$QUESTION (Uploaded file decoded and saved to ./workspace/downloads/$FILE_NAME)"
             fi
 
-          # 3. Handle Issue Comments (GitHub chat interface with URLs or attached markdown files)
           else
-            COMMENT_BODY='${{ github.event.comment.body }}'
-            QUESTION=$(echo "$COMMENT_BODY" | sed 's/\/ask//g' | sed -E 's/--model[ =][a-zA-Z0-9.-]+//g' | xargs)
+            QUESTION=$(echo "$RAW_COMMENT" | sed 's/\/ask//g' | sed -E 's/--model[ =][a-zA-Z0-9.-]+//g' | xargs)
             
-            URLS=$(echo "$COMMENT_BODY" | grep -oE 'https://[^\s\)]+' || true)
+            URLS=$(echo "$RAW_COMMENT" | grep -oE 'https://[^\s\)]+' || true)
             for url in $URLS; do
               filename=$(basename "$url" | cut -d? -f1)
               if [ -n "$filename" ]; then
@@ -241,7 +261,7 @@ jobs:
           HERMES_HUMAN_IN_THE_LOOP: "false"
           STEALTH_BROWSER_MODE: "true"
         run: |
-          PROMPT="[User Context: $ACTIVE_USER_ID] $QUESTION. Available workspace files: $(ls -la ./workspace/downloads 2>/dev/null || echo 'None')"
+          PROMPT="[User Context: $ACTIVE_USER_ID]$QUESTION. Available workspace files: $(ls -la ./workspace/downloads 2>/dev/null || echo 'None')"
 
           if command -v hermes &> /dev/null; then
             hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log
@@ -380,15 +400,43 @@ jobs:
           git config --global user.name "Hermes Agent"
           git config --global user.email "hermes-agent@users.noreply.github.com"
 
-          git fetch origin
-          git checkout ${{ env.HEAD_REF || github.ref_name }}
-          git pull --rebase origin ${{ env.HEAD_REF || github.ref_name }} || true
-
-          git add .
-          git reset ask_execution.log hermes_execution.log agent_response.json 2>/dev/null || true
-
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(hermes): sync memory & workspace state for '$ACTIVE_USER_ID' [skip ci]"
-            git push origin ${{ env.HEAD_REF || github.ref_name }}
+          TARGET_BRANCH="${{ env.HEAD_REF }}"
+          if [ -z "$TARGET_BRANCH" ]; then
+            TARGET_BRANCH="${{ github.ref_name }}"
           fi
+
+          git fetch origin
+          git checkout "$TARGET_BRANCH" || git checkout -b "$TARGET_BRANCH"
+          
+          # Retry loop for seamless concurrent pushes
+          for i in {1..5}; do
+            git pull --rebase origin "$TARGET_BRANCH" || true
+            git add .
+            git reset ask_execution.log hermes_execution.log agent_response.json 2>/dev/null || true
+
+            if git diff --cached --quiet; then
+              echo "No state changes to commit."
+              break
+            fi
+
+            git commit -m "chore(hermes): sync memory & workspace state for '$ACTIVE_USER_ID' [skip ci]"
+            if git push origin "$TARGET_BRANCH"; then
+              echo "State committed successfully!"
+              break
+            fi
+            echo "Push race detected, retrying ($i/5)..."
+            sleep $((RANDOM % 3 + 1))
+          done
           exit 0
+
+      - name: Save Updated Hermes Cache
+        if: ${{ always() }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /opt/hostedtoolcache/Python/3.11.*/x64
+            ~/.cache/pip
+            ~/.cache/ms-playwright
+            ~/.local/bin
+            ~/.hermes
+          key: hermes-dagi-cache-${{ runner.os }}-${{ github.run_id }}
