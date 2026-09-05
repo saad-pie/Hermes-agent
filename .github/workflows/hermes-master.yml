@@ -171,7 +171,7 @@ jobs:
           echo "ACTIVE_USER_ID=$USER_ID" >> $GITHUB_ENV
 
           USER_DIR="./.hermes/users/$USER_ID"
-          mkdir -p $HOME/.hermes/skills $HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
+          mkdir -p $HOME/.hermes/skills$HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
 
           if [ -d "$USER_DIR/skills" ]; then cp -r "$USER_DIR/skills/"* $HOME/.hermes/skills/ 2>/dev/null || true; fi
           if [ -d "$USER_DIR/memory" ]; then cp -r "$USER_DIR/memory/"* $HOME/.hermes/memory/ 2>/dev/null || true; fi
@@ -185,7 +185,7 @@ jobs:
           USER_FILES="./.hermes/users/$ACTIVE_USER_ID/files"
           mkdir -p ./workspace/downloads "$USER_FILES"
 
-          if [ "${{ github.event_name }}" == "schedule" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" == "schedule" ] \vert{}\vert{} [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             GOAL="Run automated Hermes Cron system maintenance, security audit, and documentation drift checks."
           else
             GOAL=$(echo "$COMMENT_BODY" | sed 's/\/hermes//g' | sed -E 's/--model[ =][a-zA-Z0-9.-]+//g' | xargs)
@@ -229,12 +229,12 @@ jobs:
           HERMES_MAX_RETRIES: "8"
           HERMES_RETRY_DELAY: "5"
         run: |
-          PROMPT="[User Context: $ACTIVE_USER_ID] $GOAL. Available files in workspace/downloads: $(ls -la ./workspace/downloads 2>/dev/null || echo 'None')"
+          PROMPT="[User Context: $ACTIVE_USER_ID]$GOAL. Available files in workspace/downloads: $(ls -la ./workspace/downloads 2>/dev/null || echo 'None')"
 
           if command -v hermes &> /dev/null; then
-            hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log
+            hermes run --prompt "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" --yolo 2>&1 | tee hermes_execution.log || hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log
           elif [ -f "$HOME/.local/bin/hermes" ]; then
-            $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log
+            $HOME/.local/bin/hermes run --prompt "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" --yolo 2>&1 \vert{} tee hermes_execution.log \vert{}\vert{} $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log
           else
             python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log || echo "Hermes execution complete."
           fi
