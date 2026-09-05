@@ -69,6 +69,20 @@ jobs:
           ref: ${{ env.HEAD_REF || github.ref }}
           fetch-depth: 1
 
+      - name: Install System Infrastructure Tools
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            xvfb chromium-browser \
+            poppler-utils tesseract-ocr ffmpeg ripgrep xz-utils \
+            sqlite3 libsqlite3-dev net-tools
+          
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 1
+          echo "DISPLAY=:99" >> $GITHUB_ENV
+          echo "CHROME_PATH=/usr/bin/chromium-browser" >> $GITHUB_ENV
+
       - name: Set up Python Runtime
         uses: actions/setup-python@v5
         with:
@@ -84,7 +98,7 @@ jobs:
             ~/.cache/ms-playwright
             ~/.local/bin
             ~/.hermes
-          key: hermes-dagi-master-cache-${{ runner.os }}-${{ github.run_id }}
+          key: hermes-dagi-master-cache-${{ runner.os }}-
           restore-keys: |
             hermes-dagi-master-cache-${{ runner.os }}-
             hermes-dagi-cache-${{ runner.os }}-
@@ -116,8 +130,8 @@ jobs:
             fi
           fi
 
-          if [ -z "$TARGET_MODEL" ] \vert{}\vert{} ! echo "$ACTIVE_MODELS" | grep -q "^${TARGET_MODEL}$"; then
-            if echo "$ACTIVE_MODELS" \vert{} grep -q "^gemini-3.1-flash-lite$"; then
+          if [ -z "$TARGET_MODEL" ] || ! echo "$ACTIVE_MODELS" | grep -q "^${TARGET_MODEL}$"; then
+            if echo "$ACTIVE_MODELS" | grep -q "^gemini-3.1-flash-lite$"; then
               TARGET_MODEL="gemini-3.1-flash-lite"
             else
               TARGET_MODEL=$(echo "$ACTIVE_MODELS" | head -n 1)
@@ -158,7 +172,7 @@ jobs:
           echo "ACTIVE_USER_ID=$USER_ID" >> $GITHUB_ENV
 
           USER_DIR="./.hermes/users/$USER_ID"
-          mkdir -p $HOME/.hermes/skills$HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
+          mkdir -p $HOME/.hermes/skills $HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
 
           if [ -d "$USER_DIR/skills" ]; then cp -r "$USER_DIR/skills/"* $HOME/.hermes/skills/ 2>/dev/null || true; fi
           if [ -d "$USER_DIR/memory" ]; then cp -r "$USER_DIR/memory/"* $HOME/.hermes/memory/ 2>/dev/null || true; fi
@@ -197,7 +211,7 @@ jobs:
             fi
 
             if [ -n "$FILE_BASE64" ] && [ -n "$FILE_NAME" ]; then
-              echo "$FILE_BASE64" \vert{} base64 -d > "./workspace/downloads/$FILE_NAME"
+              echo "$FILE_BASE64" | base64 -d > "./workspace/downloads/$FILE_NAME"
               cp "./workspace/downloads/$FILE_NAME" "$USER_FILES/"
               QUESTION="$QUESTION (Uploaded file decoded and saved to ./workspace/downloads/$FILE_NAME)"
             fi
@@ -217,7 +231,7 @@ jobs:
             fi
 
             if [ -n "$FILE_BASE64" ] && [ -n "$FILE_NAME" ]; then
-              echo "$FILE_BASE64" \vert{} base64 -d > "./workspace/downloads/$FILE_NAME"
+              echo "$FILE_BASE64" | base64 -d > "./workspace/downloads/$FILE_NAME"
               cp "./workspace/downloads/$FILE_NAME" "$USER_FILES/"
               QUESTION="$QUESTION (Uploaded file decoded and saved to ./workspace/downloads/$FILE_NAME)"
             fi
@@ -257,12 +271,12 @@ jobs:
           HERMES_HUMAN_IN_THE_LOOP: "false"
           STEALTH_BROWSER_MODE: "true"
         run: |
-          PROMPT="[User Context: $ACTIVE_USER_ID]$QUESTION. Available workspace files: $(ls -la ./workspace/downloads 2>/dev/null || echo 'None')"
+          PROMPT="[User Context: $ACTIVE_USER_ID] $QUESTION. Available workspace files: $(ls -la ./workspace/downloads 2>/dev/null || echo 'None')"
 
           if command -v hermes &> /dev/null; then
-            hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log
+            hermes run --prompt "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" --yolo 2>&1 | tee ask_execution.log || hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log
           elif [ -f "$HOME/.local/bin/hermes" ]; then
-            $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log
+            $HOME/.local/bin/hermes run --prompt "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" --yolo 2>&1 | tee ask_execution.log || $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log
           else
             python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log || echo "Execution completed."
           fi
@@ -402,7 +416,7 @@ jobs:
           fi
 
           git fetch origin
-          git checkout "$TARGET_BRANCH" \vert{}\vert{} git checkout -b "$TARGET_BRANCH"
+          git checkout "$TARGET_BRANCH" || git checkout -b "$TARGET_BRANCH"
           
           for i in {1..5}; do
             git pull --rebase origin "$TARGET_BRANCH" || true
