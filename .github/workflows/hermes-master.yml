@@ -93,8 +93,6 @@ jobs:
           echo "$MODELS_JSON" > /tmp/available_models.json
 
           ACTIVE_MODELS=$(echo "$MODELS_JSON" | jq -r '.data[] | select(.rpm > 0 and .rpd > 0) | .id')
-          echo "Active models reported by proxy:"
-          echo "$ACTIVE_MODELS"
 
           TARGET_MODEL=""
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "$INPUT_MODEL" ]; then
@@ -121,11 +119,8 @@ jobs:
 
           SELECTED=""
           if [ -n "$TARGET_MODEL" ] && echo "$ACTIVE_MODELS" | grep -q "^${TARGET_MODEL}$"; then
-            echo "Testing requested model $TARGET_MODEL..."
             if test_model "$TARGET_MODEL"; then
               SELECTED="$TARGET_MODEL"
-            else
-              echo "Requested model $TARGET_MODEL failed pre-flight health check. Falling back..."
             fi
           fi
 
@@ -133,7 +128,6 @@ jobs:
             PREFERRED_LIST="gemini-3.1-flash-lite gemini-2.5-flash gemini-3.5-flash gemma-4-31b-it"
             for candidate in $PREFERRED_LIST; do
               if echo "$ACTIVE_MODELS" | grep -q "^${candidate}$"; then
-                echo "Testing candidate model $candidate..."
                 if test_model "$candidate"; then
                   SELECTED="$candidate"
                   break
@@ -147,7 +141,6 @@ jobs:
           fi
 
           echo "SELECTED_MODEL=$SELECTED" >> $GITHUB_ENV
-          echo "Final Selected Active Model: $SELECTED"
 
       - name: Configure Hermes Provider Config for SteveAI
         run: |
@@ -162,7 +155,7 @@ jobs:
               api_key: dummy-token
           CONFIG
 
-      - name: Resolve Active User Context & Restore Isolated Memory
+      - name: Resolve Active User Context & Restore Memory
         run: |
           if [ "${{ github.event_name }}" == "issue_comment" ]; then
             USER_ID="${{ github.event.comment.user.login }}"
@@ -214,7 +207,7 @@ jobs:
           echo "$GOAL" >> $GITHUB_ENV
           echo "$EOF_MARKER" >> $GITHUB_ENV
 
-      - name: Run Autonomous Hermes DAGI Master Engine
+      - name: Run Autonomous Hermes Master Engine
         env:
           HERMES_PROVIDER: "openai"
           HERMES_MODEL: ${{ env.SELECTED_MODEL }}
@@ -242,7 +235,7 @@ jobs:
             python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log || echo "Hermes execution complete."
           fi
 
-      - name: Secure Output-Only Attachment Parser & JSON Builder
+      - name: Secure Attachment Parser & JSON Builder
         if: ${{ always() }}
         run: |
           if [ -f "hermes_execution.log" ]; then
@@ -316,7 +309,7 @@ jobs:
               json.dump(payload, f, indent=2)
           EOF
 
-      - name: Dispatch Multi-Platform Execution Summary
+      - name: Dispatch Execution Summary
         if: ${{ always() && github.event_name == 'issue_comment' }}
         uses: actions/github-script@v7
         with:
@@ -350,7 +343,7 @@ jobs:
               body: body
             });
 
-      - name: Commit Auto-Synthesized Skills & Persistent User Memory/Files
+      - name: Commit State & User Memory
         if: ${{ always() }}
         run: |
           set +e
