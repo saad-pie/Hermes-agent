@@ -125,7 +125,7 @@ jobs:
             if test_model "$TARGET_MODEL"; then
               SELECTED="$TARGET_MODEL"
             else
-              echo "Requested model $TARGET_MODEL failed pre-flight health check (rate-limited/error). Falling back..."
+              echo "Requested model $TARGET_MODEL failed pre-flight health check. Falling back..."
             fi
           fi
 
@@ -176,15 +176,9 @@ jobs:
           USER_DIR="./.hermes/users/$USER_ID"
           mkdir -p $HOME/.hermes/skills $HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
 
-          if [ -d "$USER_DIR/skills" ]; then
-            cp -r "$USER_DIR/skills/"* $HOME/.hermes/skills/ 2>/dev/null || true
-          fi
-          if [ -d "$USER_DIR/memory" ]; then
-            cp -r "$USER_DIR/memory/"* $HOME/.hermes/memory/ 2>/dev/null || true
-          fi
-          if [ -d "$USER_DIR/files" ]; then
-            cp -r "$USER_DIR/files/"* ./workspace/downloads/ 2>/dev/null || true
-          fi
+          if [ -d "$USER_DIR/skills" ]; then cp -r "$USER_DIR/skills/"* $HOME/.hermes/skills/ 2>/dev/null || true; fi
+          if [ -d "$USER_DIR/memory" ]; then cp -r "$USER_DIR/memory/"* $HOME/.hermes/memory/ 2>/dev/null || true; fi
+          if [ -d "$USER_DIR/files" ]; then cp -r "$USER_DIR/files/"* ./workspace/downloads/ 2>/dev/null || true; fi
 
       - name: Ingest Goal Payload
         id: parse_payload
@@ -243,12 +237,80 @@ jobs:
             python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log || echo "Hermes execution complete."
           fi
 
-      - name: Mask Sensitive Tokens in Output Logs
+      - name: Secure Output-Only Attachment Parser & JSON Builder
         if: ${{ always() }}
         run: |
           if [ -f "hermes_execution.log" ]; then
             sed -i -E 's/(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]{32,})/[MASKED_SECRET]/g' hermes_execution.log
           fi
+
+          python3 - << 'EOF'
+          import re, json, os, subprocess, datetime
+
+          log_file = "hermes_execution.log"
+          raw_log = open(log_file, "r").read() if os.path.exists(log_file) else ""
+
+          hermes_match = re.search(r'╭─ ⚕ Hermes ─+([\s\S]*?)╰─+', raw_log)
+          clean_answer = hermes_match.group(1).strip() if hermes_match else raw_log.strip()
+
+          thoughts = []
+          for line in raw_log.split("\n"):
+              line_str = line.strip()
+              if any(k in line_str.lower() for k in ["searched", "executing", "running", "thought", "tool", "query"]):
+                  now_str = datetime.datetime.now().strftime("%H:%M:%S")
+                  thoughts.append({"timestamp": now_str, "action": re.sub(r'\x1b\[[0-9;]*m', '', line_str)[:120]})
+
+          raw_repo = os.environ.get("GITHUB_REPOSITORY", "")
+          ref_name = os.environ.get("HEAD_REF") or os.environ.get("GITHUB_REF_NAME", "main")
+          attachments = []
+
+          blacklisted_files = {
+              "ask_execution.log", "hermes_execution.log", "agent_response.json",
+              "package.json", "package-lock.json"
+          }
+
+          try:
+              git_status = subprocess.check_output(["git", "status", "--porcelain"], text=True)
+              for line in git_status.split("\n"):
+                  if not line.strip():
+                      continue
+                  filepath = line.strip().split()[-1]
+                  
+                  # STRICT SECURITY FILTER: Exclude .hermes, downloads, git metadata, and system files
+                  if any(filepath.startswith(prefix) for prefix in [".git/", ".hermes/", "workspace/downloads/", "node_modules/", "/tmp/"]):
+                      continue
+                  if os.path.basename(filepath) in blacklisted_files:
+                      continue
+
+                  if os.path.isfile(filepath):
+                      size_bytes = os.path.getsize(filepath)
+                      size_str = f"{size_bytes / 1024:.1f} KB" if size_bytes > 1024 else f"{size_bytes} B"
+                      raw_url = f"https://raw.githubusercontent.com/{raw_repo}/{ref_name}/{filepath}"
+                      
+                      _, ext = os.path.splitext(filepath)
+                      file_type = ext.replace(".", "").upper() if ext else "FILE"
+
+                      attachments.append({
+                          "fileName": filepath,
+                          "fileSize": size_str,
+                          "fileType": file_type,
+                          "downloadUrl": raw_url
+                      })
+          except Exception as e:
+              print(f"Error detecting git files: {e}")
+
+          payload = {
+              "status": "completed",
+              "user_id": os.environ.get("ACTIVE_USER_ID", "system_cron"),
+              "model": os.environ.get("SELECTED_MODEL", ""),
+              "text_response": clean_answer,
+              "thoughts": thoughts[:20],
+              "attachments": attachments
+          }
+
+          with open("agent_response.json", "w") as f:
+              json.dump(payload, f, indent=2)
+          EOF
 
       - name: Dispatch Multi-Platform Execution Summary
         if: ${{ always() && github.event_name == 'issue_comment' }}
@@ -256,16 +318,32 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            let output = "Execution finished without log trace.";
-            if (fs.existsSync('hermes_execution.log')) {
-              const fullLog = fs.readFileSync('hermes_execution.log', 'utf8');
-              output = fullLog.length > 3500 ? "...\n" + fullLog.slice(-3500) : fullLog;
+            let payload = { text_response: "Execution finished without log trace.", attachments: [], thoughts: [] };
+            if (fs.existsSync('agent_response.json')) {
+              payload = JSON.parse(fs.readFileSync('agent_response.json', 'utf8'));
             }
+
+            let attachmentsMd = "";
+            if (payload.attachments && payload.attachments.length > 0) {
+              attachmentsMd = "### 📄 Attached Artifacts\n" + payload.attachments.map(a => 
+                `- 📎 [ **${a.fileName}** ](${a.downloadUrl}) (\`${a.fileType}\` • \`${a.fileSize}\`)`
+              ).join("\n") + "\n\n";
+            }
+
+            let thoughtsMd = "";
+            if (payload.thoughts && payload.thoughts.length > 0) {
+              thoughtsMd = "<details><summary><b>🔍 View Execution Trace & Thoughts</b></summary>\n\n```text\n" + 
+                payload.thoughts.map(t => `[${t.timestamp}] ${t.action}`).join("\n") + 
+                "\n```\n</details>\n\n";
+            }
+
+            const body = `🚀 **Hermes DAGI Autonomous OS Agent Report**\n\n${attachmentsMd}${payload.text_response}\n\n${thoughtsMd}*User Context:* \`${process.env.ACTIVE_USER_ID}\` | *Active Model:* \`${process.env.SELECTED_MODEL}\``;
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `🚀 **Hermes DAGI Autonomous OS Agent Report**\n*User Context:* \`${process.env.ACTIVE_USER_ID}\` | *Active Endpoint Model:* \`${process.env.SELECTED_MODEL}\`\n\n\`\`\`text\n${output}\n\`\`\``
+              body: body
             });
 
       - name: Commit Auto-Synthesized Skills & Persistent User Memory/Files
@@ -285,7 +363,9 @@ jobs:
           git checkout ${{ env.HEAD_REF || github.ref_name }}
           git pull --rebase origin ${{ env.HEAD_REF || github.ref_name }} || true
 
-          git add .hermes/ workspace/ *.md *.pdf *.txt 2>/dev/null || true
+          git add .
+          git reset ask_execution.log hermes_execution.log agent_response.json 2>/dev/null || true
+
           if ! git diff --cached --quiet; then
             git commit -m "chore(hermes): save persistent user memory & files for '$ACTIVE_USER_ID' [skip ci]"
             git push origin ${{ env.HEAD_REF || github.ref_name }}
