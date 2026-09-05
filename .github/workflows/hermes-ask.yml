@@ -10,22 +10,9 @@ on:
         required: true
         type: string
       model:
-        description: "Select target AI model capability"
+        description: "Optional custom model override (e.g. gemini-3.5-flash)"
         required: false
-        default: "gemini-3.1-flash-lite"
-        type: choice
-        options:
-          - "gemini-3.1-flash-lite"
-          - "gemini-3.5-flash"
-          - "gemini-3.6-flash"
-          - "gemini-3.7-flash"
-          - "gemini-3.8-flash"
-          - "gemini-2.5-flash"
-          - "gemini-2.5-flash-lite"
-          - "gemini-3-flash-preview"
-          - "gemini-3.1-flash-lite-preview"
-          - "gemma-4-31b-it"
-          - "gemma-4-26b-a4b-it"
+        type: string
       user_id:
         description: "Firebase UID or User Identifier for Isolated Memory"
         required: false
@@ -72,7 +59,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Restore Pre-Built Hermes Master Environment Cache
+      - name: Restore Pre-Built Hermes Cache
         uses: actions/cache/restore@v4
         id: restore-master-cache
         with:
@@ -89,13 +76,23 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
           echo "$HOME/.hermes/bin" >> $GITHUB_PATH
 
-      - name: Resolve Target Model Selection
-        id: resolve_model
+      - name: Fetch Models & Auto-Select Active Model
+        id: fetch_models
         env:
           INPUT_MODEL: ${{ inputs.model }}
           COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          TARGET_MODEL="gemini-3.1-flash-lite"
+          # Fetch dynamic model catalog
+          MODELS_JSON=$(curl -s "https://antigravity-seven-delta.vercel.app/api/models")
+          echo "$MODELS_JSON" > /tmp/available_models.json
+
+          # Filter active models where rpm > 0 and rpd > 0
+          ACTIVE_MODELS=$(echo "$MODELS_JSON" | jq -r '.data[] | select(.rpm > 0 and .rpd > 0) | .id')
+          echo "Active available models:"
+          echo "$ACTIVE_MODELS"
+
+          # Determine target model preference
+          TARGET_MODEL=""
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "$INPUT_MODEL" ]; then
             TARGET_MODEL="$INPUT_MODEL"
           elif [ "${{ github.event_name }}" == "issue_comment" ]; then
@@ -104,10 +101,20 @@ jobs:
               TARGET_MODEL="$EXTRACTED_MODEL"
             fi
           fi
+
+          # Fallback mechanism if no explicit model or selected model is inactive
+          if [ -z "$TARGET_MODEL" ] || ! echo "$ACTIVE_MODELS" | grep -q "^${TARGET_MODEL}$"; then
+            if echo "$ACTIVE_MODELS" | grep -q "^gemini-3.1-flash-lite$"; then
+              TARGET_MODEL="gemini-3.1-flash-lite"
+            else
+              TARGET_MODEL=$(echo "$ACTIVE_MODELS" | head -n 1)
+            fi
+          fi
+
           echo "SELECTED_MODEL=$TARGET_MODEL" >> $GITHUB_ENV
           echo "Selected Model: $TARGET_MODEL"
 
-      - name: Configure Hermes Provider
+      - name: Configure Hermes Endpoint Binding
         run: |
           mkdir -p $HOME/.hermes
           cat << CONFIG > $HOME/.hermes/config.yaml
@@ -116,11 +123,11 @@ jobs:
           stream: true
           providers:
             openai:
-              base_url: https://antigravity-seven-delta.vercel.app/v1
+              base_url: https://antigravity-seven-delta.vercel.app/api
               api_key: dummy-token
           CONFIG
 
-      - name: Resolve Active User Context & Restore Isolated Memory
+      - name: Resolve User Context & Restore Memory
         run: |
           if [ "${{ github.event_name }}" == "issue_comment" ]; then
             USER_ID="${{ github.event.comment.user.login }}"
@@ -136,17 +143,11 @@ jobs:
           USER_DIR="./.hermes/users/$USER_ID"
           mkdir -p $HOME/.hermes/skills $HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
 
-          if [ -d "$USER_DIR/skills" ]; then
-            cp -r "$USER_DIR/skills/"* $HOME/.hermes/skills/ 2>/dev/null || true
-          fi
-          if [ -d "$USER_DIR/memory" ]; then
-            cp -r "$USER_DIR/memory/"* $HOME/.hermes/memory/ 2>/dev/null || true
-          fi
-          if [ -d "$USER_DIR/files" ]; then
-            cp -r "$USER_DIR/files/"* ./workspace/downloads/ 2>/dev/null || true
-          fi
+          if [ -d "$USER_DIR/skills" ]; then cp -r "$USER_DIR/skills/"* $HOME/.hermes/skills/ 2>/dev/null || true; fi
+          if [ -d "$USER_DIR/memory" ]; then cp -r "$USER_DIR/memory/"* $HOME/.hermes/memory/ 2>/dev/null || true; fi
+          if [ -d "$USER_DIR/files" ]; then cp -r "$USER_DIR/files/"* ./workspace/downloads/ 2>/dev/null || true; fi
 
-      - name: Resolve Question & Ingest Attachments
+      - name: Resolve Question & Download Attachments
         id: parse_question
         env:
           INPUT_QUESTION: ${{ inputs.question }}
@@ -178,18 +179,18 @@ jobs:
               fi
             done
           fi
-          
+
           EOF_MARKER=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
           echo "QUESTION<<$EOF_MARKER" >> $GITHUB_ENV
           echo "$QUESTION" >> $GITHUB_ENV
           echo "$EOF_MARKER" >> $GITHUB_ENV
 
-      - name: Ask Hermes Agent
+      - name: Execute Hermes Chat Engine
         env:
           HERMES_PROVIDER: "openai"
           HERMES_MODEL: ${{ env.SELECTED_MODEL }}
           HERMES_STREAM: "true"
-          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
+          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/api"
           OPENAI_API_KEY: "dummy-token"
           GITHUB_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
@@ -207,17 +208,17 @@ jobs:
           elif [ -f "$HOME/.local/bin/hermes" ]; then
             $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model "${SELECTED_MODEL}" 2>&1 | tee ask_execution.log
           else
-            python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${SELECTED_MODEL}" 2>&1 | tee ask_execution.log || echo "Execution complete."
+            python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${SELECTED_MODEL}" 2>&1 | tee ask_execution.log || echo "Execution completed."
           fi
 
-      - name: Mask Sensitive Tokens in Output Logs
+      - name: Sanitize Output Logs
         if: ${{ always() }}
         run: |
           if [ -f "ask_execution.log" ]; then
             sed -i -E 's/(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]{32,})/[MASKED_SECRET]/g' ask_execution.log
           fi
 
-      - name: Reply to Issue or PR
+      - name: Publish Comment
         if: ${{ always() && github.event_name == 'issue_comment' }}
         uses: actions/github-script@v7
         with:
@@ -232,31 +233,29 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body: `💬 **Hermes Agent Answer:**\n*User Context:* \`${process.env.ACTIVE_USER_ID}\` | *Model:* \`${process.env.SELECTED_MODEL}\`\n\n\`\`\`text\n${output}\n\`\`\``
+              body: `💬 **Hermes Agent Answer:**\n*User Context:* \`${process.env.ACTIVE_USER_ID}\` | *Active Endpoint Model:* \`${process.env.SELECTED_MODEL}\`\n\n\`\`\`text\n${output}\n\`\`\``
             });
 
-      - name: Commit Auto-Synthesized Skills, Persistent Memory & Generated Artifacts
+      - name: Save Memory & Workspace Artifacts
         if: ${{ always() }}
         run: |
           set +e
           USER_DIR="./.hermes/users/$ACTIVE_USER_ID"
           mkdir -p "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
-          
+
           cp -r $HOME/.hermes/skills/* "$USER_DIR/skills/" 2>/dev/null || true
           cp -r $HOME/.hermes/memory/* "$USER_DIR/memory/" 2>/dev/null || true
 
           git config --global user.name "Hermes Agent"
           git config --global user.email "hermes-agent@users.noreply.github.com"
-          
+
           git fetch origin
           git checkout ${{ env.HEAD_REF || github.ref_name }}
           git pull --rebase origin ${{ env.HEAD_REF || github.ref_name }} || true
 
           git add .hermes/ workspace/ *.md *.pdf *.txt 2>/dev/null || true
           if ! git diff --cached --quiet; then
-            git commit -m "chore(hermes): update persistent user memory & generated files for '$ACTIVE_USER_ID' [skip ci]"
+            git commit -m "chore(hermes): sync memory & workspace state for '$ACTIVE_USER_ID' [skip ci]"
             git push origin ${{ env.HEAD_REF || github.ref_name }}
-          else
-            echo "No changes to user memory or persistent files."
           fi
           exit 0
