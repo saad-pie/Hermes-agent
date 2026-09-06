@@ -1,0 +1,22 @@
+name: "Layer 1: Claude Environment Execution"
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "Terminal or code task to execute"
+        required: true
+      repo_ref:
+        description: "Target branch/commit"
+        default: "main"
+
+jobs:
+  execute-claude-layer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Terminal / Computer-Use Task
+        run: |
+          echo "Executing command: ${{ github.event.inputs.command }}"
+          # Run local CLI scripts, builds, PR generations, or artifact exports
+          
