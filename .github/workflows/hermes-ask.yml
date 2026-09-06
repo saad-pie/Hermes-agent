@@ -20,7 +20,7 @@ on:
         required: false
         type: string
       target_layer:
-        description: "Direct layer trigger override (claude, chatgpt, gemini, background, memory)"
+        description: "Direct layer trigger override (claude, chatgpt, gemini, background, memory, direct)"
         required: false
         type: string
 
@@ -30,25 +30,18 @@ permissions:
   pull-requests: write
   actions: write
 
+concurrency:
+  group: hermes-ask-sync-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   route-and-dispatch:
     if: ${{ (github.event_name == 'repository_dispatch') || (github.event_name == 'workflow_dispatch') || (contains(github.event.comment.body, '/ask') && !github.event.comment.user.bot) }}
     runs-on: ubuntu-latest
 
     steps:
-      - name: Restore Pre-Built Environment from Master Cache
-        uses: actions/cache/restore@v4
-        id: restore-master-cache
-        with:
-          path: |
-            /opt/hostedtoolcache/Python/3.11.*/x64
-            ~/.cache/pip
-            ~/.cache/ms-playwright
-            ~/.local/bin
-            ~/.hermes
-          key: hermes-dagi-master-cache-${{ runner.os }}-
-          restore-keys: |
-            hermes-dagi-master-cache-${{ runner.os }}-
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
       - name: Resolve Target Layer Workflow
         id: router
@@ -66,6 +59,7 @@ jobs:
               gemini) TARGET="gemini-workspace.yml" ;;
               background) TARGET="background-orchestrator.yml" ;;
               memory) TARGET="memory-sync.yml" ;;
+              direct) TARGET="direct" ;;
             esac
           else
             if echo "$PROMPT_LOWER" | grep -qE "research|scrape|excel|xlsx|pdf|search|report"; then
@@ -82,7 +76,7 @@ jobs:
           fi
 
           echo "DISPATCH_TARGET=$TARGET" >> $GITHUB_ENV
-          echo "Target workflow selected: $TARGET"
+          echo "Target selected: $TARGET"
 
       - name: Dispatch Worker Sub-Workflow
         uses: actions/github-script@v7
@@ -92,8 +86,10 @@ jobs:
             const targetWorkflow = process.env.DISPATCH_TARGET;
             const question = process.env.RAW_PROMPT || "Default query executed by router";
             const userId = "${{ github.event.client_payload.user_id || inputs.user_id || github.event.comment.user.login || 'public_user' }}";
-            
-            console.log(`Dispatching ${targetWorkflow} for user ${userId}`);
+            const modelOverride = "${{ github.event.client_payload.model || inputs.model || '' }}";
+            const issueNumber = context.issue ? context.issue.number : null;
+
+            console.log(`Dispatching target: ${targetWorkflow} for user ${userId}`);
 
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
@@ -105,6 +101,8 @@ jobs:
                 command: question,
                 query: question,
                 user_id: userId,
+                model: modelOverride,
+                issue_number: issueNumber ? String(issueNumber) : "",
                 action_type: "auto_routed",
                 payload: JSON.stringify({ question, userId }),
                 job_id: `job-${Date.now()}`,
