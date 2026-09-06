@@ -6,17 +6,40 @@ on:
       command:
         description: "Terminal or code task to execute"
         required: true
-      repo_ref:
-        description: "Target branch/commit"
-        default: "main"
+        type: string
+      user_id:
+        description: "Target User ID"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  actions: read
 
 jobs:
   execute-claude-layer:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run Terminal / Computer-Use Task
+      - name: Restore Environment Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /opt/hostedtoolcache/Python/3.11.*/x64
+            ~/.cache/pip
+            ~/.cache/ms-playwright
+            ~/.local/bin
+            ~/.hermes
+          key: hermes-dagi-master-cache-${{ runner.os }}-
+
+      - name: Run Terminal & Computer-Use Step
+        env:
+          HERMES_PROVIDER: "openai"
+          HERMES_MODEL: "gemini-3.1-flash-lite"
+          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
+          OPENAI_API_KEY: "dummy-token"
         run: |
-          echo "Executing command: ${{ github.event.inputs.command }}"
-          # Run local CLI scripts, builds, PR generations, or artifact exports
-          
+          echo "Executing Layer 1 Task: ${{ inputs.command }}"
+          export PATH="$HOME/.local/bin:$HOME/.hermes/bin:$PATH"
+          hermes run --prompt "${{ inputs.command }}" --provider openai --yolo || true
