@@ -1,54 +1,197 @@
-name: "Layer 3: Gemini Multimodal & Workspace Sync"
+name: "Layer 3 - Native Multimodal Ecosystem & Workspace Sync Worker"
 
 on:
   workflow_dispatch:
     inputs:
-      action_type:
-        description: "Type (gmail, calendar, drive, audio_vision)"
+      task_prompt:
+        description: "Task prompt for Gemini Workspace and Multimodal execution"
         required: true
         type: string
-      payload:
-        description: "JSON string payload"
-        required: true
-        type: string
+        default: "Analyze attached documents, pull upcoming Google Calendar events, and draft a response email in Gmail."
       user_id:
-        description: "User ID"
+        description: "Target user ID for isolated memory storage"
         required: false
         type: string
-      model:
-        description: "Model override"
+        default: "default_user"
+      input_media_path:
+        description: "Path to input video, audio, or high-res image file"
         required: false
         type: string
+        default: ""
 
-permissions:
-  contents: write
-  issues: write
+  repository_dispatch:
+    types: [layer3_gemini_workspace]
 
 jobs:
-  execute-gemini-layer:
+  execute-multimodal-workspace:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 30
 
-      - name: Restore Master Environment Cache
+    env:
+      USER_ID: ${{ inputs.user_id || github.event.client_payload.user_id || 'default_user' }}
+      TASK_PROMPT: ${{ inputs.task_prompt || github.event.client_payload.task_prompt }}
+      INPUT_MEDIA_PATH: ${{ inputs.input_media_path || github.event.client_payload.input_media_path || '' }}
+      GCP_SA_KEY_BASE64: ${{ secrets.GCP_SA_KEY_BASE64 }}
+      CUSTOM_PROXY_URL: "https://antigravity-seven-delta.vercel.app/v1"
+
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: ⚡ Restore Pre-Warmed Master Environment Cache
+        id: restore-cache
         uses: actions/cache/restore@v4
         with:
           path: |
-            /opt/hostedtoolcache/Python/3.11.*/x64
             ~/.cache/pip
-            ~/.local/bin
-            ~/.hermes
-          key: hermes-dagi-master-cache-${{ runner.os }}-
-          restore-keys: |
-            hermes-dagi-master-cache-${{ runner.os }}-
+            ~/.npm
+            ~/.hermes/env
+          key: hermes-dagi-master-cache-ubuntu-latest
 
-      - name: Process Workspace Multimodal Workflow
-        env:
-          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
-          OPENAI_API_KEY: "dummy-token"
-          GITHUB_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
-          HERMES_YOLO: "true"
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 🛠️ Install Multimodal & Workspace Dependencies
         run: |
-          export PATH="$HOME/.local/bin:$HOME/.hermes/bin:$PATH"
-          PROMPT="Process Google Workspace / Multimodal action '${{ inputs.action_type }}' using payload: ${{ inputs.payload }}."
-          hermes run --prompt "$PROMPT" --provider openai --yolo 2>&1 | tee workspace_execution.log || hermes chat -q "$PROMPT" --provider openai 2>&1 | tee workspace_execution.log
+          sudo apt-get update && sudo apt-get install -y ffmpeg tesseract-ocr
+          pip install --upgrade pip
+          # Google Workspace OAuth & API Libraries
+          pip install google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
+          # Multimodal & Vision Libraries
+          pip install Pillow pytesseract requests google-genai
+          # Audio parsing engine
+          pip install openai-whisper
+
+      - name: 🔑 Configure Scoped OAuth2 Credentials
+        run: |
+          USER_MEM_DIR="./.hermes/users/${USER_ID}"
+          OUTPUTS_DIR="${USER_MEM_DIR}/outputs"
+          mkdir -p "${USER_MEM_DIR}" "${OUTPUTS_DIR}"
+
+          if [ -n "${GCP_SA_KEY_BASE64}" ]; then
+            echo "${GCP_SA_KEY_BASE64}" | base64 -d > "${USER_MEM_DIR}/service_account.json"
+            echo "Google Workspace OAuth2 Service Account key successfully decoded."
+          else
+            echo "WARNING: GCP_SA_KEY_BASE64 secret not set. Workspace features will run in mock mode."
+          fi
+
+      - name: 👁️ Execute Vision, OCR & Audio Processing
+        run: |
+          cat << 'EOF' > multimodal_processor.py
+          import os
+          import json
+          from PIL import Image
+          import pytesseract
+
+          user_id = os.getenv("USER_ID")
+          media_path = os.getenv("INPUT_MEDIA_PATH")
+          outputs_dir = f"./.hermes/users/{user_id}/outputs"
+
+          parsed_media_data = {"ocr_text": "", "audio_transcript": ""}
+
+          # 1. OCR Visual Parsing with Tesseract & PIL
+          if media_path and os.path.exists(media_path) and media_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+              print(f"[Multimodal] Running OCR vision extraction on: {media_path}")
+              img = Image.open(media_path)
+              text = pytesseract.image_to_string(img)
+              parsed_media_data["ocr_text"] = text.strip()
+
+          # 2. Audio Processing Pipeline via ffmpeg/Whisper
+          if media_path and os.path.exists(media_path) and media_path.lower().endswith(('.mp3', '.wav', '.m4a', '.mp4')):
+              print(f"[Multimodal] Processing audio stream using Whisper: {media_path}")
+              try:
+                  import whisper
+                  model = whisper.load_model("tiny")
+                  result = model.transcribe(media_path)
+                  parsed_media_data["audio_transcript"] = result.get("text", "")
+              except Exception as e:
+                  print(f"Audio transcription warning: {e}")
+
+          out_path = f"./.hermes/users/{user_id}/multimodal_context.json"
+          with open(out_path, "w") as f:
+              json.dump(parsed_media_data, f, indent=2)
+
+          print(f"[Multimodal] Media context saved to {out_path}")
+          EOF
+
+          python multimodal_processor.py
+
+      - name: 📅 Sync Google Workspace (Gmail, Calendar, Drive)
+        run: |
+          cat << 'EOF' > workspace_sync.py
+          import os
+          import json
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+
+          user_id = os.getenv("USER_ID")
+          prompt = os.getenv("TASK_PROMPT")
+          key_path = f"./.hermes/users/{user_id}/service_account.json"
+          outputs_dir = f"./.hermes/users/{user_id}/outputs"
+
+          SCOPES = [
+              'https://www.googleapis.com/auth/gmail.readonly',
+              'https://www.googleapis.com/auth/gmail.compose',
+              'https://www.googleapis.com/auth/calendar.readonly',
+              'https://www.googleapis.com/auth/drive.readonly'
+          ]
+
+          workspace_summary = {"calendar_events": [], "emails": [], "drive_files": []}
+
+          if os.path.exists(key_path):
+              try:
+                  creds = service_account.Credentials.from_service_account_file(key_path, scopes=SCOPES)
+                  
+                  # 1. Google Calendar Integration
+                  calendar_service = build('calendar', 'v3', credentials=creds)
+                  events_result = calendar_service.events().list(calendarId='primary', maxResults=5).execute()
+                  events = events_result.get('items', [])
+                  workspace_summary["calendar_events"] = [e.get('summary') for e in events]
+
+                  # 2. Gmail Integration
+                  gmail_service = build('gmail', 'v1', credentials=creds)
+                  messages_result = gmail_service.users().messages().list(userId='me', maxResults=5).execute()
+                  workspace_summary["emails"] = [m.get('id') for m in messages_result.get('messages', [])]
+
+                  print("[Workspace] Successfully connected and retrieved Workspace data via OAuth2.")
+              except Exception as e:
+                  print(f"Workspace API Execution Note: {e}")
+                  workspace_summary["status"] = f"OAuth initialization attempted: {e}"
+          else:
+              print("[Workspace] Running fallback workspace mock sync...")
+              workspace_summary["calendar_events"] = ["Mock Meeting: Q3 Strategy Review"]
+              workspace_summary["emails"] = ["Mock Email: Re: Proposal Updates"]
+
+          out_path = f"{outputs_dir}/workspace_sync_result.json"
+          with open(out_path, "w") as f:
+              json.dump(workspace_summary, f, indent=2)
+
+          print(f"[Workspace] Results saved to {out_path}")
+          EOF
+
+          python workspace_sync.py
+
+      - name: 💾 Commit & Synchronize Workspace State
+        if: always()
+        run: |
+          git config --global user.name "hermes-layer3-worker[bot]"
+          git config --global user.email "hermes-bot@users.noreply.github.com"
+
+          git add ./.hermes/users/${USER_ID}/
+
+          for i in {1..5}; do
+            git commit -m "chore(workspace): sync Layer 3 state & multimodal logs for ${USER_ID} [skip ci]" && break || true
+            git pull --rebase origin ${GITHUB_REF_NAME}
+            sleep $((RANDOM % 5 + 1))
+          done
+
+          git push origin ${GITHUB_REF_NAME} || echo "No changes to commit or push."
+
+      - name: 📤 Upload Layer 3 Sync Output Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-workspace-artifacts-${{ env.USER_ID }}
+          path: ./.hermes/users/${{ env.USER_ID }}/outputs/
+          
