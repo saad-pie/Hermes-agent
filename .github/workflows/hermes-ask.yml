@@ -1,4 +1,4 @@
-name: Hermes Ask Agent
+name: Hermes Ask Router Agent
 
 on:
   repository_dispatch:
@@ -12,23 +12,15 @@ on:
         required: true
         type: string
       model:
-        description: "Optional custom model override (e.g. gemini-3.5-flash)"
+        description: "Optional custom model override"
         required: false
         type: string
       user_id:
-        description: "Firebase UID or User Identifier for Isolated Memory"
+        description: "User Identifier for Isolated Memory"
         required: false
         type: string
-      file_url:
-        description: "Optional Direct URL to a file/image/PDF/code asset to ingest"
-        required: false
-        type: string
-      file_base64:
-        description: "Optional Base64 encoded file upload content"
-        required: false
-        type: string
-      file_name:
-        description: "Filename for the Base64 uploaded file"
+      target_layer:
+        description: "Direct layer trigger override (claude, chatgpt, gemini, background, memory)"
         required: false
         type: string
 
@@ -36,58 +28,14 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
-  actions: read
-
-concurrency:
-  group: hermes-ask-sync-${{ github.ref }}
-  cancel-in-progress: false
+  actions: write
 
 jobs:
-  hermes-ask:
+  route-and-dispatch:
     if: ${{ (github.event_name == 'repository_dispatch') || (github.event_name == 'workflow_dispatch') || (contains(github.event.comment.body, '/ask') && !github.event.comment.user.bot) }}
     runs-on: ubuntu-latest
 
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-
     steps:
-      - name: Extract PR Ref Context
-        if: ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request }}
-        id: pr_data
-        run: |
-          PR_URL="${{ github.event.issue.pull_request.url }}"
-          PR_JSON=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$PR_URL")
-          HEAD_REF=$(echo "$PR_JSON" | jq -r .head.ref)
-          echo "HEAD_REF=$HEAD_REF" >> $GITHUB_ENV
-
-      - name: Fast Checkout Workspace
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ env.HEAD_REF || github.ref }}
-          fetch-depth: 1
-
-      - name: Install System Infrastructure Tools
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends \
-            xvfb chromium-browser \
-            poppler-utils tesseract-ocr ffmpeg ripgrep xz-utils \
-            sqlite3 libsqlite3-dev net-tools
-          
-          Xvfb :99 -screen 0 1920x1080x24 &
-          sleep 1
-          echo "DISPLAY=:99" >> $GITHUB_ENV
-          echo "CHROME_PATH=/usr/bin/chromium-browser" >> $GITHUB_ENV
-
-      - name: Set up Python Runtime
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Restore Pre-Built Environment from Master Cache
         uses: actions/cache/restore@v4
         id: restore-master-cache
@@ -101,338 +49,65 @@ jobs:
           key: hermes-dagi-master-cache-${{ runner.os }}-
           restore-keys: |
             hermes-dagi-master-cache-${{ runner.os }}-
-            hermes-dagi-cache-${{ runner.os }}-
 
-      - name: Export Executable Paths
-        run: |
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          echo "$HOME/.hermes/bin" >> $GITHUB_PATH
-
-      - name: Fast Active Model Resolution
-        id: fetch_models
+      - name: Resolve Target Layer Workflow
+        id: router
         env:
-          DISPATCH_MODEL: ${{ github.event.client_payload.model }}
-          INPUT_MODEL: ${{ inputs.model }}
-          RAW_COMMENT: ${{ github.event.comment.body }}
+          RAW_PROMPT: ${{ github.event.client_payload.question || inputs.question || github.event.comment.body }}
+          MANUAL_LAYER: ${{ inputs.target_layer }}
         run: |
-          MODELS_JSON=$(curl -s "https://antigravity-seven-delta.vercel.app/api/models")
-          ACTIVE_MODELS=$(echo "$MODELS_JSON" | jq -r '.data[] | select(.rpm > 0 and .rpd > 0) | .id')
+          PROMPT_LOWER=$(echo "$RAW_PROMPT" | tr '[:upper:]' '[:lower:]')
+          TARGET="claude-os.yml"
 
-          TARGET_MODEL=""
-          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
-            TARGET_MODEL="$DISPATCH_MODEL"
-          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            TARGET_MODEL="$INPUT_MODEL"
-          elif [ "${{ github.event_name }}" == "issue_comment" ]; then
-            EXTRACTED_MODEL=$(echo "$RAW_COMMENT" | grep -oE '--model[ =][a-zA-Z0-9.-]+' | awk '{print $2}' || true)
-            if [ -n "$EXTRACTED_MODEL" ]; then
-              TARGET_MODEL="$EXTRACTED_MODEL"
-            fi
-          fi
-
-          if [ -z "$TARGET_MODEL" ] || ! echo "$ACTIVE_MODELS" | grep -q "^${TARGET_MODEL}$"; then
-            if echo "$ACTIVE_MODELS" | grep -q "^gemini-3.1-flash-lite$"; then
-              TARGET_MODEL="gemini-3.1-flash-lite"
+          if [ -n "$MANUAL_LAYER" ]; then
+            case "$MANUAL_LAYER" in
+              claude) TARGET="claude-os.yml" ;;
+              chatgpt) TARGET="chatgpt-research.yml" ;;
+              gemini) TARGET="gemini-workspace.yml" ;;
+              background) TARGET="background-orchestrator.yml" ;;
+              memory) TARGET="memory-sync.yml" ;;
+            esac
+          else
+            if echo "$PROMPT_LOWER" | grep -qE "research|scrape|excel|xlsx|pdf|search|report"; then
+              TARGET="chatgpt-research.yml"
+            elif echo "$PROMPT_LOWER" | grep -qE "gmail|docs|calendar|drive|workspace|audio|video"; then
+              TARGET="gemini-workspace.yml"
+            elif echo "$PROMPT_LOWER" | grep -qE "cron|schedule|loop|retry|audit|background"; then
+              TARGET="background-orchestrator.yml"
+            elif echo "$PROMPT_LOWER" | grep -qE "memory|context|user state|vector|store"; then
+              TARGET="memory-sync.yml"
             else
-              TARGET_MODEL=$(echo "$ACTIVE_MODELS" | head -n 1)
+              TARGET="claude-os.yml"
             fi
           fi
 
-          echo "SELECTED_MODEL=$TARGET_MODEL" >> $GITHUB_ENV
+          echo "DISPATCH_TARGET=$TARGET" >> $GITHUB_ENV
+          echo "Target workflow selected: $TARGET"
 
-      - name: Configure Hermes Binding
-        run: |
-          mkdir -p $HOME/.hermes
-          cat << CONFIG > $HOME/.hermes/config.yaml
-          provider: openai
-          model: ${{ env.SELECTED_MODEL }}
-          stream: true
-          providers:
-            openai:
-              base_url: https://antigravity-seven-delta.vercel.app/v1
-              api_key: dummy-token
-          CONFIG
-
-      - name: Resolve User Context & Restore Memory
-        env:
-          DISPATCH_USER: ${{ github.event.client_payload.user_id }}
-          COMMENT_USER: ${{ github.event.comment.user.login }}
-          INPUT_USER: ${{ inputs.user_id }}
-        run: |
-          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
-            USER_ID="$DISPATCH_USER"
-          elif [ "${{ github.event_name }}" == "issue_comment" ]; then
-            USER_ID="$COMMENT_USER"
-          elif [ -n "$INPUT_USER" ]; then
-            USER_ID="$INPUT_USER"
-          fi
-
-          [ -z "$USER_ID" ] && USER_ID="public_user"
-          USER_ID=$(echo "$USER_ID" | sed 's/[^a-zA-Z0-9_-]/_/g')
-          echo "ACTIVE_USER_ID=$USER_ID" >> $GITHUB_ENV
-
-          USER_DIR="./.hermes/users/$USER_ID"
-          mkdir -p $HOME/.hermes/skills $HOME/.hermes/memory $HOME/.hermes/fts5 ./workspace/downloads "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
-
-          if [ -d "$USER_DIR/skills" ]; then cp -r "$USER_DIR/skills/"* $HOME/.hermes/skills/ 2>/dev/null || true; fi
-          if [ -d "$USER_DIR/memory" ]; then cp -r "$USER_DIR/memory/"* $HOME/.hermes/memory/ 2>/dev/null || true; fi
-          if [ -d "$USER_DIR/files" ]; then cp -r "$USER_DIR/files/"* ./workspace/downloads/ 2>/dev/null || true; fi
-
-      - name: Resolve Question & Ingest File Uploads
-        id: parse_question
-        env:
-          DISPATCH_Q: ${{ github.event.client_payload.question }}
-          DISPATCH_URL: ${{ github.event.client_payload.file_url }}
-          DISPATCH_B64: ${{ github.event.client_payload.file_base64 }}
-          DISPATCH_NAME: ${{ github.event.client_payload.file_name }}
-          INPUT_Q: ${{ inputs.question }}
-          INPUT_URL: ${{ inputs.file_url }}
-          INPUT_B64: ${{ inputs.file_base64 }}
-          INPUT_NAME: ${{ inputs.file_name }}
-          RAW_COMMENT: ${{ github.event.comment.body }}
-        run: |
-          USER_FILES="./.hermes/users/$ACTIVE_USER_ID/files"
-          mkdir -p ./workspace/downloads "$USER_FILES"
-
-          QUESTION=""
-          
-          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
-            QUESTION="$DISPATCH_Q"
-            FILE_URL="$DISPATCH_URL"
-            FILE_BASE64="$DISPATCH_B64"
-            FILE_NAME="$DISPATCH_NAME"
-
-            if [ -n "$FILE_URL" ]; then
-              filename=$(basename "$FILE_URL" | cut -d? -f1)
-              [ -z "$filename" ] && filename="uploaded_asset"
-              curl -sL "$FILE_URL" -o "./workspace/downloads/$filename"
-              cp "./workspace/downloads/$filename" "$USER_FILES/"
-              QUESTION="$QUESTION (Ingested file downloaded to ./workspace/downloads/$filename)"
-            fi
-
-            if [ -n "$FILE_BASE64" ] && [ -n "$FILE_NAME" ]; then
-              echo "$FILE_BASE64" | base64 -d > "./workspace/downloads/$FILE_NAME"
-              cp "./workspace/downloads/$FILE_NAME" "$USER_FILES/"
-              QUESTION="$QUESTION (Uploaded file decoded and saved to ./workspace/downloads/$FILE_NAME)"
-            fi
-
-          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            QUESTION="$INPUT_Q"
-            FILE_URL="$INPUT_URL"
-            FILE_BASE64="$INPUT_B64"
-            FILE_NAME="$INPUT_NAME"
-
-            if [ -n "$FILE_URL" ]; then
-              filename=$(basename "$FILE_URL" | cut -d? -f1)
-              [ -z "$filename" ] && filename="uploaded_asset"
-              curl -sL "$FILE_URL" -o "./workspace/downloads/$filename"
-              cp "./workspace/downloads/$filename" "$USER_FILES/"
-              QUESTION="$QUESTION (Ingested file downloaded to ./workspace/downloads/$filename)"
-            fi
-
-            if [ -n "$FILE_BASE64" ] && [ -n "$FILE_NAME" ]; then
-              echo "$FILE_BASE64" | base64 -d > "./workspace/downloads/$FILE_NAME"
-              cp "./workspace/downloads/$FILE_NAME" "$USER_FILES/"
-              QUESTION="$QUESTION (Uploaded file decoded and saved to ./workspace/downloads/$FILE_NAME)"
-            fi
-
-          else
-            QUESTION=$(echo "$RAW_COMMENT" | sed 's/\/ask//g' | sed -E 's/--model[ =][a-zA-Z0-9.-]+//g' | xargs)
-            
-            URLS=$(echo "$RAW_COMMENT" | grep -oE 'https://[^\s\)]+' || true)
-            for url in $URLS; do
-              filename=$(basename "$url" | cut -d? -f1)
-              if [ -n "$filename" ]; then
-                curl -sL "$url" -o "./workspace/downloads/$filename"
-                cp "./workspace/downloads/$filename" "$USER_FILES/"
-                QUESTION="$QUESTION (Ingested asset saved to ./workspace/downloads/$filename)"
-              fi
-            done
-          fi
-
-          EOF_MARKER=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-          echo "QUESTION<<$EOF_MARKER" >> $GITHUB_ENV
-          echo "$QUESTION" >> $GITHUB_ENV
-          echo "$EOF_MARKER" >> $GITHUB_ENV
-
-      - name: Execute Hermes Engine
-        env:
-          HERMES_PROVIDER: "openai"
-          HERMES_MODEL: ${{ env.SELECTED_MODEL }}
-          HERMES_STREAM: "true"
-          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
-          OPENAI_API_KEY: "dummy-token"
-          GITHUB_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
-          GH_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
-          HERMES_YOLO: "true"
-          HERMES_AUTO_CREATE_SKILLS: "true"
-          HERMES_REDIS_URL: "redis://localhost:6379"
-          HERMES_MAX_TOKEN_BUDGET: "100000"
-          HERMES_HUMAN_IN_THE_LOOP: "false"
-          STEALTH_BROWSER_MODE: "true"
-        run: |
-          PROMPT="[User Context: $ACTIVE_USER_ID] $QUESTION. Available workspace files: $(ls -la ./workspace/downloads 2>/dev/null || echo 'None')"
-
-          if command -v hermes &> /dev/null; then
-            hermes run --prompt "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" --yolo 2>&1 | tee ask_execution.log || hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log
-          elif [ -f "$HOME/.local/bin/hermes" ]; then
-            $HOME/.local/bin/hermes run --prompt "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" --yolo 2>&1 | tee ask_execution.log || $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log
-          else
-            python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee ask_execution.log || echo "Execution completed."
-          fi
-
-      - name: Secure Attachment Parser & JSON Builder
-        if: ${{ always() }}
-        run: |
-          if [ -f "ask_execution.log" ]; then
-            sed -i -E 's/(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]{32,})/[MASKED_SECRET]/g' ask_execution.log
-          fi
-
-          python3 - << 'EOF'
-          import re, json, os, subprocess, datetime
-
-          log_file = "ask_execution.log"
-          raw_log = open(log_file, "r").read() if os.path.exists(log_file) else ""
-
-          hermes_match = re.search(r'╭─ ⚕ Hermes ─+([\s\S]*?)╰─+', raw_log)
-          clean_answer = hermes_match.group(1).strip() if hermes_match else raw_log.strip()
-
-          thoughts = []
-          for line in raw_log.split("\n"):
-              line_str = line.strip()
-              if any(k in line_str.lower() for k in ["searched", "executing", "running", "thought", "tool", "query"]):
-                  now_str = datetime.datetime.now().strftime("%H:%M:%S")
-                  thoughts.append({"timestamp": now_str, "action": re.sub(r'\x1b\[[0-9;]*m', '', line_str)[:120]})
-
-          raw_repo = os.environ.get("GITHUB_REPOSITORY", "")
-          ref_name = os.environ.get("HEAD_REF") or os.environ.get("GITHUB_REF_NAME", "main")
-          attachments = []
-
-          blacklisted_files = {
-              "ask_execution.log", "hermes_execution.log", "agent_response.json",
-              "package.json", "package-lock.json"
-          }
-
-          try:
-              git_status = subprocess.check_output(["git", "status", "--porcelain"], text=True)
-              for line in git_status.split("\n"):
-                  if not line.strip():
-                      continue
-                  filepath = line.strip().split()[-1]
-                  
-                  if any(filepath.startswith(prefix) for prefix in [".git/", ".hermes/", "workspace/downloads/", "node_modules/", "/tmp/"]):
-                      continue
-                  if os.path.basename(filepath) in blacklisted_files:
-                      continue
-
-                  if os.path.isfile(filepath):
-                      size_bytes = os.path.getsize(filepath)
-                      size_str = f"{size_bytes / 1024:.1f} KB" if size_bytes > 1024 else f"{size_bytes} B"
-                      raw_url = f"https://raw.githubusercontent.com/{raw_repo}/{ref_name}/{filepath}"
-                      
-                      _, ext = os.path.splitext(filepath)
-                      file_type = ext.replace(".", "").upper() if ext else "FILE"
-
-                      attachments.append({
-                          "fileName": filepath,
-                          "fileSize": size_str,
-                          "fileType": file_type,
-                          "downloadUrl": raw_url
-                      })
-          except Exception as e:
-              print(f"Error detecting git files: {e}")
-
-          payload = {
-              "status": "completed",
-              "user_id": os.environ.get("ACTIVE_USER_ID", "public_user"),
-              "model": os.environ.get("SELECTED_MODEL", ""),
-              "text_response": clean_answer,
-              "thoughts": thoughts[:20],
-              "attachments": attachments
-          }
-
-          with open("agent_response.json", "w") as f:
-              json.dump(payload, f, indent=2)
-          EOF
-
-      - name: Upload Stream Output Artifact
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: hermes-execution-log
-          path: agent_response.json
-          retention-days: 1
-
-      - name: Publish Comment
-        if: ${{ always() && github.event_name == 'issue_comment' }}
+      - name: Dispatch Worker Sub-Workflow
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
           script: |
-            const fs = require('fs');
-            let payload = { text_response: "No output generated.", attachments: [], thoughts: [] };
-            if (fs.existsSync('agent_response.json')) {
-              payload = JSON.parse(fs.readFileSync('agent_response.json', 'utf8'));
-            }
+            const targetWorkflow = process.env.DISPATCH_TARGET;
+            const question = process.env.RAW_PROMPT || "Default query executed by router";
+            const userId = "${{ github.event.client_payload.user_id || inputs.user_id || github.event.comment.user.login || 'public_user' }}";
+            
+            console.log(`Dispatching ${targetWorkflow} for user ${userId}`);
 
-            let attachmentsMd = "";
-            if (payload.attachments && payload.attachments.length > 0) {
-              attachmentsMd = "### 📄 Attached Artifacts\n" + payload.attachments.map(a => 
-                `- 📎 [ **${a.fileName}** ](${a.downloadUrl}) (\`${a.fileType}\` • \`${a.fileSize}\`)`
-              ).join("\n") + "\n\n";
-            }
-
-            let thoughtsMd = "";
-            if (payload.thoughts && payload.thoughts.length > 0) {
-              thoughtsMd = "<details><summary><b>🔍 View Execution Trace & Thoughts</b></summary>\n\n```text\n" + 
-                payload.thoughts.map(t => `[${t.timestamp}] ${t.action}`).join("\n") + 
-                "\n```\n</details>\n\n";
-            }
-
-            const body = `${attachmentsMd}${payload.text_response}\n\n${thoughtsMd}*User Context:* \`${process.env.ACTIVE_USER_ID}\` | *Active Model:* \`${process.env.SELECTED_MODEL}\``;
-
-            await github.rest.issues.createComment({
+            await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: body
+              workflow_id: targetWorkflow,
+              ref: context.ref || 'main',
+              inputs: {
+                question: question,
+                command: question,
+                query: question,
+                user_id: userId,
+                action_type: "auto_routed",
+                payload: JSON.stringify({ question, userId }),
+                job_id: `job-${Date.now()}`,
+                memory_payload: question
+              }
             });
-
-      - name: Save Memory & Workspace State
-        if: ${{ always() }}
-        run: |
-          set +e
-          USER_DIR="./.hermes/users/$ACTIVE_USER_ID"
-          mkdir -p "$USER_DIR/skills" "$USER_DIR/memory" "$USER_DIR/files"
-
-          cp -r $HOME/.hermes/skills/* "$USER_DIR/skills/" 2>/dev/null || true
-          cp -r $HOME/.hermes/memory/* "$USER_DIR/memory/" 2>/dev/null || true
-
-          git config --global user.name "Hermes Agent"
-          git config --global user.email "hermes-agent@users.noreply.github.com"
-
-          TARGET_BRANCH="${{ env.HEAD_REF }}"
-          if [ -z "$TARGET_BRANCH" ]; then
-            TARGET_BRANCH="${{ github.ref_name }}"
-          fi
-
-          git fetch origin
-          git checkout "$TARGET_BRANCH" || git checkout -b "$TARGET_BRANCH"
-          
-          for i in {1..5}; do
-            git pull --rebase origin "$TARGET_BRANCH" || true
-            git add .
-            git reset ask_execution.log hermes_execution.log agent_response.json 2>/dev/null || true
-
-            if git diff --cached --quiet; then
-              echo "No state changes to commit."
-              break
-            fi
-
-            git commit -m "chore(hermes): sync memory & workspace state for '$ACTIVE_USER_ID' [skip ci]"
-            if git push origin "$TARGET_BRANCH"; then
-              echo "State committed successfully!"
-              break
-            fi
-            sleep $((RANDOM % 3 + 1))
-          done
-          exit 0
