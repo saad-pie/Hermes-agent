@@ -74,7 +74,6 @@ jobs:
             const fs = require('fs');
             const logContent = fs.existsSync('claude_execution.log') ? fs.readFileSync('claude_execution.log', 'utf8') : 'Execution complete.';
             const sanitized = logContent.replace(/(ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{32,})/g, '[MASKED]');
-            
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -83,4 +82,3 @@ jobs:
             });
         env:
           ISSUE_NUMBER: ${{ inputs.issue_number }}
-          
