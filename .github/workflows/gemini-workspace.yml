@@ -6,18 +6,42 @@ on:
       action_type:
         description: "Type (gmail, calendar, drive, audio_vision)"
         required: true
+        type: string
       payload:
         description: "JSON string payload"
         required: true
+        type: string
+      user_id:
+        description: "User ID"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
 
 jobs:
   execute-gemini-layer:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Sync Google Workspace / Multimodal Input
+      - name: Restore Environment Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /opt/hostedtoolcache/Python/3.11.*/x64
+            ~/.cache/pip
+            ~/.local/bin
+            ~/.hermes
+          key: hermes-dagi-master-cache-${{ runner.os }}-
+
+      - name: Process Workspace Multimodal Workflow
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
+          OPENAI_API_KEY: "dummy-token"
         run: |
-          # Process large contexts or communicate via Workspace APIs
+          export PATH="$HOME/.local/bin:$HOME/.hermes/bin:$PATH"
+          echo "Syncing Google Workspace / Processing Payload for Action: ${{ inputs.action_type }}"
+          hermes run --prompt "Process workspace task action=${{ inputs.action_type }} with payload=${{ inputs.payload }}" --yolo || true
           
