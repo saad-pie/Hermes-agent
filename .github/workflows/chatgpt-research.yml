@@ -6,17 +6,39 @@ on:
       query:
         description: "Deep research query topic"
         required: true
+        type: string
       export_format:
         description: "Deliverable format (xlsx, pptx, pdf)"
         default: "xlsx"
+        type: string
+      user_id:
+        description: "User ID"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  issues: write
 
 jobs:
   execute-chatgpt-layer:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run Web Scraping & Deliverable Generation
+      - name: Restore Environment Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /opt/hostedtoolcache/Python/3.11.*/x64
+            ~/.cache/pip
+            ~/.local/bin
+            ~/.hermes
+          key: hermes-dagi-master-cache-${{ runner.os }}-
+
+      - name: Run Deep Research & Document Export
         run: |
-          python3 -m pip install openpyxl python-pptx
-          # Run multi-step search and document generation python script
+          python3 -m pip install openpyxl python-pptx pypdf requests > /dev/null 2>&1
+          echo "Executing Deep Research for query: ${{ inputs.query }}"
+          export PATH="$HOME/.local/bin:$HOME/.hermes/bin:$PATH"
+          hermes run --prompt "Conduct deep web search on: ${{ inputs.query }} and generate a ${{ inputs.export_format }} report." --yolo || true
           
