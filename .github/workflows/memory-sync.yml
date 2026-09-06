@@ -6,16 +6,42 @@ on:
       user_id:
         description: "Isolated User ID key"
         required: true
+        type: string
       memory_payload:
         description: "Context to store or update"
         required: true
+        type: string
+
+permissions:
+  contents: write
+  issues: write
 
 jobs:
   execute-memory-sync:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Restore Environment Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /opt/hostedtoolcache/Python/3.11.*/x64
+            ~/.cache/pip
+            ~/.local/bin
+            ~/.hermes
+          key: hermes-dagi-master-cache-${{ runner.os }}-
+
       - name: Sync User Memory Partition
         run: |
-          # Persist updated user state into repository database/store
+          USER_ID=$(echo "${{ inputs.user_id }}" | sed 's/[^a-zA-Z0-9_-]/_/g')
+          USER_DIR="./.hermes/users/$USER_ID/memory"
+          mkdir -p "$USER_DIR"
           
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "[$TIMESTAMP] ${{ inputs.memory_payload }}" >> "$USER_DIR/state_log.txt"
+          
+          git config --global user.name "Hermes Memory Sync"
+          git config --global user.email "hermes-memory@users.noreply.github.com"
+          git add .
+          git commit -m "chore(memory): sync state partition for '$USER_ID' [skip ci]" || echo "No changes to commit"
+          git push origin HEAD || echo "Push skipped or no changes"
