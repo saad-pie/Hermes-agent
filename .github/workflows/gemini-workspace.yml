@@ -52,4 +52,3 @@ jobs:
           export PATH="$HOME/.local/bin:$HOME/.hermes/bin:$PATH"
           PROMPT="Process Google Workspace / Multimodal action '${{ inputs.action_type }}' using payload: ${{ inputs.payload }}."
           hermes run --prompt "$PROMPT" --provider openai --yolo 2>&1 | tee workspace_execution.log || hermes chat -q "$PROMPT" --provider openai 2>&1 | tee workspace_execution.log
-          
