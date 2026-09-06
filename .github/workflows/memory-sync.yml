@@ -26,16 +26,14 @@ jobs:
           USER_ID=$(echo "${{ inputs.user_id }}" | sed 's/[^a-zA-Z0-9_-]/_/g')
           USER_DIR="./.hermes/users/$USER_ID/memory"
           mkdir -p "$USER_DIR"
-          
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           echo "[$TIMESTAMP] ${{ inputs.memory_payload }}" >> "$USER_DIR/state_log.txt"
 
           git config --global user.name "Hermes Memory Sync"
           git config --global user.email "hermes-memory@users.noreply.github.com"
-          
           git fetch origin
           git checkout ${{ github.ref_name }} || git checkout -b ${{ github.ref_name }}
-          
+
           for i in {1..5}; do
             git pull --rebase origin ${{ github.ref_name }} || true
             git add "$USER_DIR"
