@@ -23,7 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Restore Environment Cache
+
+      - name: Restore Master Environment Cache
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -32,10 +33,16 @@ jobs:
             ~/.local/bin
             ~/.hermes
           key: hermes-dagi-master-cache-${{ runner.os }}-
+          restore-keys: |
+            hermes-dagi-master-cache-${{ runner.os }}-
 
       - name: Run Background Orchestration Loop
+        env:
+          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
+          OPENAI_API_KEY: "dummy-token"
+          GITHUB_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
+          HERMES_YOLO: "true"
         run: |
           export PATH="$HOME/.local/bin:$HOME/.hermes/bin:$PATH"
-          echo "Executing background orchestration loop for job: ${{ inputs.job_id || 'system_cron' }}"
-          hermes run --prompt "Run system background maintenance and self-correction sequence." --yolo || true
-          
+          PROMPT="Run background maintenance, codebase self-correction, and audit sequence for job: ${{ inputs.job_id || 'system_cron' }}."
+          hermes run --prompt "$PROMPT" --provider openai --yolo 2>&1 | tee bg_execution.log || hermes chat -q "$PROMPT" --provider openai 2>&1 | tee bg_execution.log
