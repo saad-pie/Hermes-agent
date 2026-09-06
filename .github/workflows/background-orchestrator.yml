@@ -6,15 +6,36 @@ on:
       job_id:
         description: "Scheduled job or loop identifier"
         required: true
+        type: string
+      user_id:
+        description: "User ID"
+        required: false
+        type: string
   schedule:
-    - cron: '0 8 * * 1' # Runs every Monday at 8 AM UTC
+    - cron: '0 8 * * 1'
+
+permissions:
+  contents: write
+  issues: write
 
 jobs:
   execute-orchestration:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run Self-Correction / Scheduled Loop
+      - name: Restore Environment Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /opt/hostedtoolcache/Python/3.11.*/x64
+            ~/.cache/pip
+            ~/.local/bin
+            ~/.hermes
+          key: hermes-dagi-master-cache-${{ runner.os }}-
+
+      - name: Run Background Orchestration Loop
         run: |
-          echo "Executing background loop with automatic retries"
+          export PATH="$HOME/.local/bin:$HOME/.hermes/bin:$PATH"
+          echo "Executing background orchestration loop for job: ${{ inputs.job_id || 'system_cron' }}"
+          hermes run --prompt "Run system background maintenance and self-correction sequence." --yolo || true
           
