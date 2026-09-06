@@ -1,0 +1,22 @@
+name: "Layer 2: ChatGPT Research Engine"
+
+on:
+  workflow_dispatch:
+    inputs:
+      query:
+        description: "Deep research query topic"
+        required: true
+      export_format:
+        description: "Deliverable format (xlsx, pptx, pdf)"
+        default: "xlsx"
+
+jobs:
+  execute-chatgpt-layer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Web Scraping & Deliverable Generation
+        run: |
+          python3 -m pip install openpyxl python-pptx
+          # Run multi-step search and document generation python script
+          
