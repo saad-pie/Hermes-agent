@@ -15,6 +15,14 @@ on:
         description: "User ID"
         required: false
         type: string
+      model:
+        description: "Model override"
+        required: false
+        type: string
+      issue_number:
+        description: "Issue number"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -25,7 +33,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Restore Environment Cache
+
+      - name: Restore Master Environment Cache
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -34,11 +43,37 @@ jobs:
             ~/.local/bin
             ~/.hermes
           key: hermes-dagi-master-cache-${{ runner.os }}-
+          restore-keys: |
+            hermes-dagi-master-cache-${{ runner.os }}-
 
-      - name: Run Deep Research & Document Export
+      - name: Run Deep Research & Deliverable Generation
+        env:
+          HERMES_PROVIDER: "openai"
+          HERMES_MODEL: ${{ inputs.model || 'gemini-3.1-flash-lite' }}
+          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
+          OPENAI_API_KEY: "dummy-token"
+          GITHUB_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
+          HERMES_YOLO: "true"
         run: |
-          python3 -m pip install openpyxl python-pptx pypdf requests > /dev/null 2>&1
-          echo "Executing Deep Research for query: ${{ inputs.query }}"
           export PATH="$HOME/.local/bin:$HOME/.hermes/bin:$PATH"
-          hermes run --prompt "Conduct deep web search on: ${{ inputs.query }} and generate a ${{ inputs.export_format }} report." --yolo || true
-          
+          python3 -m pip install openpyxl python-pptx pypdf requests > /dev/null 2>&1 || true
+          PROMPT="Perform deep web research on '${{ inputs.query }}'. Synthesize information and compile the formatted report into an output deliverable file with format: ${{ inputs.export_format }}."
+          hermes run --prompt "$PROMPT" --provider openai --yolo 2>&1 | tee research_execution.log || hermes chat -q "$PROMPT" --provider openai 2>&1 | tee research_execution.log
+
+      - name: Post Deliverable Comment
+        if: ${{ always() && inputs.issue_number != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const logContent = fs.existsSync('research_execution.log') ? fs.readFileSync('research_execution.log', 'utf8') : 'Research complete.';
+            const sanitized = logContent.replace(/(ghp_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{32,})/g, '[MASKED]');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.ISSUE_NUMBER),
+              body: `🔍 **Layer 2 (Research Engine) Completed**\n\n\`\`\`text\n${sanitized.slice(-2000)}\n\`\`\``
+            });
+        env:
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
