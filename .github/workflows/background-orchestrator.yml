@@ -1,11 +1,9 @@
 name: "Layer 4 - Background Orchestration & Autonomous Self-Correction"
 
 on:
-  # Scheduled Recurrent Cron Trigger (e.g., Every Monday at 08:00 UTC)
   schedule:
-    - cron: "0 8 * * 1"
+    - cron: "0 8 * * 1"  # Runs every Monday at 08:00 UTC
 
-  # Asynchronous Event Trigger from router or external webhooks
   repository_dispatch:
     types: [layer4_background_orchestration]
 
@@ -36,6 +34,7 @@ jobs:
       USER_ID: ${{ inputs.user_id || github.event.client_payload.user_id || 'default_user' }}
       TASK_PROMPT: ${{ inputs.task_prompt || github.event.client_payload.task_prompt }}
       MAX_RETRIES: ${{ inputs.max_retries || github.event.client_payload.max_retries || '3' }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       CUSTOM_PROXY_URL: "https://antigravity-seven-delta.vercel.app/v1"
 
     steps:
@@ -77,20 +76,18 @@ jobs:
           prompt = os.getenv("TASK_PROMPT")
           max_retries = int(os.getenv("MAX_RETRIES", "3"))
           proxy_url = os.getenv("CUSTOM_PROXY_URL")
+          api_key = os.getenv("GEMINI_API_KEY")
           outputs_dir = f"./.hermes/users/{user_id}/outputs"
 
           print(f"Starting Background Task for User [{user_id}]: {prompt}")
 
-          # Initial generated Python target script (Simulating initial draft that may have errors)
           target_script = f"{outputs_dir}/generated_task.py"
           
-          # Initial code template to test self-correction loop
           initial_code = """# Autonomous Generated Task
           import math
 
           def execute_calculation():
               data = [100, 200, 300, 400]
-              # Intentional error for self-correction test if triggered
               result = sum(data) / len(data)
               print(f"Calculated Mean: {result}")
               return result
@@ -102,7 +99,6 @@ jobs:
           with open(target_script, "w") as f:
               f.write(initial_code)
 
-          # --- Self-Correction Loop Engine ---
           success = False
           attempt = 0
 
@@ -110,7 +106,6 @@ jobs:
               attempt += 1
               print(f"\n--- [Execution Attempt {attempt}/{max_retries}] ---")
 
-              # Run the generated script and capture STDOUT / STDERR
               proc = subprocess.run(
                   [sys.executable, target_script],
                   capture_output=True,
@@ -122,7 +117,6 @@ jobs:
                   print("Output:\n", proc.stdout)
                   success = True
                   
-                  # Save execution trace log
                   with open(f"{outputs_dir}/execution_success.log", "w") as f:
                       f.write(f"Attempt {attempt} Succeeded:\n{proc.stdout}")
               else:
@@ -132,7 +126,10 @@ jobs:
 
                   print(f"🤖 Re-planning and self-correcting via proxy: {proxy_url}...")
                   
-                  # Payload sent to AI proxy to fix errors
+                  headers = {"Content-Type": "application/json"}
+                  if api_key:
+                      headers["Authorization"] = f"Bearer {api_key}"
+
                   payload = {
                       "model": "gemini-3.5-flash-lite",
                       "messages": [
@@ -146,13 +143,12 @@ jobs:
                   try:
                       response = requests.post(
                           f"{proxy_url}/chat/completions",
-                          headers={"Content-Type": "application/json"},
+                          headers=headers,
                           json=payload,
                           timeout=30
                       )
                       if response.status_code == 200:
                           corrected_code = response.json()["choices"][0]["message"]["content"]
-                          # Clean response markdown blocks if present
                           if "```python" in corrected_code:
                               corrected_code = corrected_code.split("```python")[1].split("```")[0]
                           elif "```" in corrected_code:
@@ -194,4 +190,3 @@ jobs:
         with:
           name: background-orchestrator-artifacts-${{ env.USER_ID }}
           path: ./.hermes/users/${{ env.USER_ID }}/outputs/
-          
