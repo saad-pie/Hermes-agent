@@ -1,0 +1,32 @@
+# Core Agent Engine & Infrastructure
+hermes-agent
+redis
+langchain-openai
+PyGithub
+fastapi
+websockets
+uvicorn
+
+# GUI, Computer Use & Web Automation
+playwright
+browser-use
+Pillow
+pytesseract
+
+# Document & Native Deliverables Engine
+openpyxl
+python-pptx
+reportlab
+pdfplumber
+pypdf
+
+# Workspace, Multimodal & Speech Engine
+google-api-python-client
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
+google-genai
+anthropic
+openai-whisper
+beautifulsoup4
+requests
