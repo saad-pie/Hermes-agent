@@ -2,7 +2,7 @@ name: "Layer 4 - Background Orchestration & Autonomous Self-Correction"
 
 on:
   schedule:
-    - cron: "0 8 * * 1"  # Runs every Monday at 08:00 UTC
+    - cron: "0 8 * * 1"
 
   repository_dispatch:
     types: [layer4_background_orchestration]
@@ -35,7 +35,7 @@ jobs:
       TASK_PROMPT: ${{ inputs.task_prompt || github.event.client_payload.task_prompt }}
       MAX_RETRIES: ${{ inputs.max_retries || github.event.client_payload.max_retries || '3' }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      CUSTOM_PROXY_URL: "https://antigravity-seven-delta.vercel.app/v1"
+      CUSTOM_PROXY_URL: "https://antigravity-seven-delta.vercel.v1"
 
     steps:
       - name: 📥 Checkout Repository
@@ -61,7 +61,6 @@ jobs:
           USER_MEM_DIR="./.hermes/users/${USER_ID}"
           OUTPUTS_DIR="${USER_MEM_DIR}/outputs"
           mkdir -p "${USER_MEM_DIR}" "${OUTPUTS_DIR}"
-          echo "Memory partition mounted for background process."
 
       - name: 🔄 Autonomous Task Execution & Self-Correction Loop
         run: |
@@ -79,94 +78,11 @@ jobs:
           api_key = os.getenv("GEMINI_API_KEY")
           outputs_dir = f"./.hermes/users/{user_id}/outputs"
 
-          print(f"Starting Background Task for User [{user_id}]: {prompt}")
-
           target_script = f"{outputs_dir}/generated_task.py"
-          
-          initial_code = """# Autonomous Generated Task
-          import math
-
-          def execute_calculation():
-              data = [100, 200, 300, 400]
-              result = sum(data) / len(data)
-              print(f"Calculated Mean: {result}")
-              return result
-
-          if __name__ == "__main__":
-              execute_calculation()
-          """
-
+          initial_code = """# Autonomous Generated Task\nimport math\n\ndef execute_calculation():\n    data = [100, 200, 300, 400]\n    result = sum(data) / len(data)\n    print(f"Calculated Mean: {result}")\n    return result\n\nif __name__ == "__main__":\n    execute_calculation()\n"""
           with open(target_script, "w") as f:
               f.write(initial_code)
-
-          success = False
-          attempt = 0
-
-          while attempt < max_retries and not success:
-              attempt += 1
-              print(f"\n--- [Execution Attempt {attempt}/{max_retries}] ---")
-
-              proc = subprocess.run(
-                  [sys.executable, target_script],
-                  capture_output=True,
-                  text=True
-              )
-
-              if proc.returncode == 0:
-                  print("✅ Task Executed Successfully!")
-                  print("Output:\n", proc.stdout)
-                  success = True
-                  
-                  with open(f"{outputs_dir}/execution_success.log", "w") as f:
-                      f.write(f"Attempt {attempt} Succeeded:\n{proc.stdout}")
-              else:
-                  error_msg = proc.stderr
-                  print(f"❌ Execution Failed on attempt {attempt}.")
-                  print("Error Traceback:\n", error_msg)
-
-                  print(f"🤖 Re-planning and self-correcting via proxy: {proxy_url}...")
-                  
-                  headers = {"Content-Type": "application/json"}
-                  if api_key:
-                      headers["Authorization"] = f"Bearer {api_key}"
-
-                  payload = {
-                      "model": "gemini-3.5-flash-lite",
-                      "messages": [
-                          {
-                              "role": "user",
-                              "content": f"The following Python script failed with this error:\n\nERROR:\n{error_msg}\n\nSCRIPT:\n{open(target_script).read()}\n\nPlease return ONLY the corrected runnable Python code."
-                          }
-                      ]
-                  }
-
-                  try:
-                      response = requests.post(
-                          f"{proxy_url}/chat/completions",
-                          headers=headers,
-                          json=payload,
-                          timeout=30
-                      )
-                      if response.status_code == 200:
-                          corrected_code = response.json()["choices"][0]["message"]["content"]
-                          if "```python" in corrected_code:
-                              corrected_code = corrected_code.split("```python")[1].split("```")[0]
-                          elif "```" in corrected_code:
-                              corrected_code = corrected_code.split("```")[1].split("```")[0]
-                          
-                          with open(target_script, "w") as f:
-                              f.write(corrected_code.strip())
-                          print("Refactored code saved. Retrying loop...")
-                      else:
-                          print(f"Proxy correction request failed with status: {response.status_code}")
-                  except Exception as e:
-                      print(f"Self-correction API call error: {e}")
-
-          if not success:
-              print("\n🚨 Maximum self-correction retries reached without resolution.")
-              sys.exit(1)
           EOF
-
           python self_correction_orchestrator.py
 
       - name: 💾 Commit & Synchronize Orchestration Logs
@@ -174,15 +90,12 @@ jobs:
         run: |
           git config --global user.name "hermes-layer4-worker[bot]"
           git config --global user.email "hermes-bot@users.noreply.github.com"
-
           git add ./.hermes/users/${USER_ID}/
-
           for i in {1..5}; do
             git commit -m "chore(orchestrator): sync Layer 4 background logs for ${USER_ID} [skip ci]" && break || true
             git pull --rebase origin ${GITHUB_REF_NAME}
             sleep $((RANDOM % 5 + 1))
           done
-
           git push origin ${GITHUB_REF_NAME} || echo "No changes to commit or push."
 
       - name: 📤 Upload Background Execution Artifacts
@@ -190,3 +103,4 @@ jobs:
         with:
           name: background-orchestrator-artifacts-${{ env.USER_ID }}
           path: ./.hermes/users/${{ env.USER_ID }}/outputs/
+          
