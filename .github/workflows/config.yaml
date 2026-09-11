@@ -1,0 +1,11 @@
+provider: openai
+model: ${{ env.SELECTED_MODEL }}
+stream: true
+providers:
+  openai:
+    base_url: https://antigravity-seven-delta.vercel.v1
+    api_key: dummy-token
+  opencode:
+    base_url: https://opencode.zen/v1
+    api_key: keyless
+    
