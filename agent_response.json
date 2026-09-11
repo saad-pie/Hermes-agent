@@ -2,18 +2,18 @@
   "status": "completed",
   "user_id": "system_cron",
   "model": "gemini-3.1-flash-lite",
-  "text_response": "usage: hermes [-h] [--version] [-z PROMPT] [--usage-file PATH] [-m MODEL]\n              [--provider PROVIDER] [--reasoning LEVEL] [-t TOOLSETS]\n              [--resume SESSION] [--no-restore-cwd] [--in DIR]\n              [--continue [SESSION_NAME]] [--worktree] [--accept-hooks]\n              [--skills SKILLS] [--yolo] [--pass-session-id]\n              [--ignore-user-config] [--ignore-rules] [--safe-mode] [--tui]\n              [--cli] [--dev]\n              {chat,model,moa,fallback,worktree,browser,secrets,egress,migrate,gateway,proxy,lsp,setup,whatsapp,whatsapp-cloud,slack,send,login,logout,auth,status,pause,resume,cron,sync,webhook,peer,portal,kanban,project,hooks,doctor,verify,security,approvals,dump,debug,backup,checkpoints,import,import-agent,config,skin,console,pairing,skills,bundles,plugins,curator,pets,journey,learning,memory-graph,memory,tools,computer-use,mcp,sessions,insights,monitoring,claw,update,uninstall,acp,profile,completion,dashboard,serve,desktop,gui,logs,prompt-size}\n              ...\nhermes: error: argument command: invalid choice: 'run' (choose from 'chat', 'model', 'moa', 'fallback', 'worktree', 'browser', 'secrets', 'egress', 'migrate', 'gateway', 'proxy', 'lsp', 'setup', 'whatsapp', 'whatsapp-cloud', 'slack', 'send', 'login', 'logout', 'auth', 'status', 'pause', 'resume', 'cron', 'sync', 'webhook', 'peer', 'portal', 'kanban', 'project', 'hooks', 'doctor', 'verify', 'security', 'approvals', 'dump', 'debug', 'backup', 'checkpoints', 'import', 'import-agent', 'config', 'skin', 'console', 'pairing', 'skills', 'bundles', 'plugins', 'curator', 'pets', 'journey', 'learning', 'memory-graph', 'memory', 'tools', 'computer-use', 'mcp', 'sessions', 'insights', 'monitoring', 'claw', 'update', 'uninstall', 'acp', 'profile', 'completion', 'dashboard', 'serve', 'desktop', 'gui', 'logs', 'prompt-size')",
+  "text_response": "usage: hermes [-h] [--version] [-z PROMPT] [--usage-file PATH] [-m MODEL]\n              [--provider PROVIDER] [--reasoning LEVEL] [-t TOOLSETS]\n              [--resume SESSION] [--no-restore-cwd] [--in DIR]\n              [--continue [SESSION_NAME]] [--worktree] [--accept-hooks]\n              [--skills SKILLS] [--yolo] [--pass-session-id]\n              [--ignore-user-config] [--ignore-rules] [--safe-mode] [--tui]\n              [--cli] [--dev]\n              {chat,model,moa,fallback,worktree,browser,secrets,egress,migrate,gateway,proxy,lsp,setup,whatsapp,whatsapp-cloud,slack,send,login,logout,auth,status,pause,resume,cron,sync,webhook,peer,portal,kanban,project,hooks,doctor,verify,security,approvals,dump,debug,backup,checkpoints,import,import-agent,config,skin,console,pairing,skills,bundles,plugins,curator,pets,journey,learning,memory-graph,memory,tools,computer-use,mcp,sessions,insights,monitoring,claw,vault,update,uninstall,acp,profile,completion,dashboard,serve,desktop,gui,logs,prompt-size}\n              ...\nhermes: error: argument command: invalid choice: 'run' (choose from 'chat', 'model', 'moa', 'fallback', 'worktree', 'browser', 'secrets', 'egress', 'migrate', 'gateway', 'proxy', 'lsp', 'setup', 'whatsapp', 'whatsapp-cloud', 'slack', 'send', 'login', 'logout', 'auth', 'status', 'pause', 'resume', 'cron', 'sync', 'webhook', 'peer', 'portal', 'kanban', 'project', 'hooks', 'doctor', 'verify', 'security', 'approvals', 'dump', 'debug', 'backup', 'checkpoints', 'import', 'import-agent', 'config', 'skin', 'console', 'pairing', 'skills', 'bundles', 'plugins', 'curator', 'pets', 'journey', 'learning', 'memory-graph', 'memory', 'tools', 'computer-use', 'mcp', 'sessions', 'insights', 'monitoring', 'claw', 'vault', 'update', 'uninstall', 'acp', 'profile', 'completion', 'dashboard', 'serve', 'desktop', 'gui', 'logs', 'prompt-size')",
   "thoughts": [
     {
-      "timestamp": "03:18:36",
+      "timestamp": "03:14:29",
       "action": "[--provider PROVIDER] [--reasoning LEVEL] [-t TOOLSETS]"
     },
     {
-      "timestamp": "03:18:36",
+      "timestamp": "03:14:29",
       "action": "{chat,model,moa,fallback,worktree,browser,secrets,egress,migrate,gateway,proxy,lsp,setup,whatsapp,whatsapp-cloud,slack,s"
     },
     {
-      "timestamp": "03:18:36",
+      "timestamp": "03:14:29",
       "action": "hermes: error: argument command: invalid choice: 'run' (choose from 'chat', 'model', 'moa', 'fallback', 'worktree', 'bro"
     }
   ],
