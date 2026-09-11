@@ -155,8 +155,11 @@ jobs:
           stream: true
           providers:
             openai:
-              base_url: https://antigravity-seven-delta.vercel.app/v1
+              base_url: https://antigravity-seven-delta.vercel.v1
               api_key: dummy-token
+            opencode:
+              base_url: https://opencode.zen/v1
+              api_key: keyless
           CONFIG
 
       - name: Resolve Active User Context & Restore Memory
@@ -216,7 +219,7 @@ jobs:
           HERMES_PROVIDER: "openai"
           HERMES_MODEL: ${{ env.SELECTED_MODEL }}
           HERMES_STREAM: "true"
-          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.app/v1"
+          OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.v1"
           OPENAI_API_KEY: "dummy-token"
           GITHUB_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
