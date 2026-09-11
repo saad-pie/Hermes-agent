@@ -39,7 +39,7 @@ jobs:
       USER_ID: ${{ inputs.user_id || github.event.client_payload.user_id || 'default_user' }}
       TASK_PROMPT: ${{ inputs.task_prompt || github.event.client_payload.task_prompt }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      CUSTOM_PROXY_URL: "https://antigravity-seven-delta.vercel.app/v1"
+      CUSTOM_PROXY_URL: "https://antigravity-seven-delta.vercel.v1"
 
     steps:
       - name: 📥 Checkout Repository
