@@ -36,7 +36,7 @@ jobs:
       USER_ID: ${{ inputs.user_id || github.event.client_payload.user_id || 'default_user' }}
       TASK_PROMPT: ${{ inputs.task_prompt || github.event.client_payload.task_prompt }}
       OUTPUT_FORMAT: ${{ inputs.output_format || github.event.client_payload.output_format || 'all' }}
-      CUSTOM_PROXY_URL: "https://antigravity-seven-delta.vercel.app/v1"
+      CUSTOM_PROXY_URL: "https://antigravity-seven-delta.vercel.v1"
 
     steps:
       - name: 📥 Checkout Repository
@@ -61,11 +61,8 @@ jobs:
       - name: 🛠️ Install Research & Native Document Engines
         run: |
           pip install --upgrade pip
-          # Dual-Tier Browsing & Scraping Libraries
           pip install requests beautifulsoup4 playwright pdfplumber
-          # Native Document Deliverable Engines
           pip install openpyxl python-pptx reportlab Pillow
-          # Playwright Headless Browser Engine
           npx playwright install chromium --with-deps
 
       - name: 🧠 Restore User Memory Partition
@@ -88,7 +85,6 @@ jobs:
 
           print(f"[Tier 1 Scraping] Executing lightweight HTTP requests for prompt: {prompt}")
 
-          # Example lightweight fetch pipeline
           headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
           scraped_data = []
 
@@ -164,12 +160,10 @@ jobs:
           outputs_dir = f"./.hermes/users/{user_id}/outputs"
           os.makedirs(outputs_dir, exist_ok=True)
 
-          # --- 1. Excel Generator with Native Formulas (openpyxl) ---
           wb = Workbook()
           ws = wb.active
           ws.title = "Financial Model"
 
-          # Headers
           headers = ["Quarter", "Revenue ($)", "Expenses ($)", "Net Profit ($)"]
           ws.append(headers)
           header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
@@ -181,7 +175,6 @@ jobs:
               cell.font = header_font
               cell.alignment = Alignment(horizontal="center")
 
-          # Data rows
           data = [
               ["Q1", 150000, 90000],
               ["Q2", 180000, 95000],
@@ -191,11 +184,9 @@ jobs:
 
           for row_idx, row_data in enumerate(data, start=2):
               q, rev, exp = row_data
-              # Profit calculation formula
               profit_formula = f"=B{row_idx}-C{row_idx}"
               ws.append([q, rev, exp, profit_formula])
 
-          # Total Row with Sum Formulas
           ws.append(["Total", "=SUM(B2:B5)", "=SUM(C2:C5)", "=SUM(D2:D5)"])
           total_font = Font(bold=True)
           for col_num in range(1, 5):
@@ -203,63 +194,30 @@ jobs:
 
           xlsx_path = os.path.join(outputs_dir, "Research_Financial_Model.xlsx")
           wb.save(xlsx_path)
-          print(f"Generated Excel Model with Formulas: {xlsx_path}")
 
-          # --- 2. PowerPoint Deck Generator (python-pptx) ---
           prs = Presentation()
-          
-          # Slide 1: Title Slide
-          title_slide_layout = prs.slide_layouts[0]
-          slide1 = prs.slides.add_slide(title_slide_layout)
+          slide1 = prs.slides.add_slide(prs.slide_layouts[0])
           slide1.shapes.title.text = "Research & Deliverables Deck"
           slide1.placeholders[1].text = f"Generated for User: {user_id}\nPrompt: {prompt[:60]}..."
 
-          # Slide 2: Analysis Summary
-          bullet_slide_layout = prs.slide_layouts[1]
-          slide2 = prs.slides.add_slide(bullet_slide_layout)
+          slide2 = prs.slides.add_slide(prs.slide_layouts[1])
           slide2.shapes.title.text = "Executive Summary"
           tf = slide2.placeholders[1].text_frame
           tf.text = "Key Research Insights:"
           p = tf.add_paragraph()
           p.text = "Automated dual-tier web browsing completed."
           p.level = 1
-          p = tf.add_paragraph()
-          p.text = "Native spreadsheet populated with Excel sum formulas."
-          p.level = 1
 
           pptx_path = os.path.join(outputs_dir, "Research_Presentation.pptx")
           prs.save(pptx_path)
-          print(f"Generated PowerPoint Deck: {pptx_path}")
 
-          # --- 3. PDF Report Generator (reportlab) ---
           pdf_path = os.path.join(outputs_dir, "Research_Executive_Report.pdf")
           c = canvas.Canvas(pdf_path, pagesize=letter)
           width, height = letter
 
           c.setFont("Helvetica-Bold", 18)
           c.drawString(50, height - 50, "Executive Research Report")
-
-          c.setFont("Helvetica", 10)
-          c.drawString(50, height - 70, f"User ID: {user_id} | Multi-Step Research Engine")
-
-          c.setLineWidth(1)
-          c.line(50, height - 80, width - 50, height - 80)
-
-          c.setFont("Helvetica-Bold", 12)
-          c.drawString(50, height - 110, "Task Objective:")
-          c.setFont("Helvetica", 11)
-          c.drawString(50, height - 125, f"{prompt[:80]}")
-
-          c.setFont("Helvetica-Bold", 12)
-          c.drawString(50, height - 160, "Generated Artifacts:")
-          c.setFont("Helvetica", 10)
-          c.drawString(70, height - 180, "• Native Financial Model (.xlsx)")
-          c.drawString(70, height - 195, "• Executive Presentation (.pptx)")
-          c.drawString(70, height - 210, "• Executive PDF Summary (.pdf)")
-
-          c.showPage()
           c.save()
-          print(f"Generated PDF Report: {pdf_path}")
           EOF
 
           python document_builder.py
