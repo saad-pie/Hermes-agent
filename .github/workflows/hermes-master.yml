@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: "Optional custom model override (e.g. gemini-3.5-flash)"
+        description: "Optional custom model override (e.g. gemini-3.5-flash or qwen/qwen3.6-27b)"
         required: false
         type: string
   issue_comment:
@@ -92,17 +92,20 @@ jobs:
         env:
           INPUT_MODEL: ${{ inputs.model }}
           COMMENT_BODY: ${{ github.event.comment.body }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          AIHUBMIX_API_KEY: ${{ secrets.AIHUBMIX_API_KEY }}
+          UNOROUTER_API_KEY: ${{ secrets.UNOROUTER_API_KEY }}
         run: |
           MODELS_JSON=$(curl -s "https://antigravity-seven-delta.vercel.app/api/models")
           echo "$MODELS_JSON" > /tmp/available_models.json
 
-          ACTIVE_MODELS=$(echo "$MODELS_JSON" | jq -r '.data[] | select(.rpm > 0 and .rpd > 0) | .id')
+          ACTIVE_MODELS=$(echo "$MODELS_JSON" | jq -r '.data[] | select(.rpm > 0 and .rpd > 0) | .id' 2>/dev/null || true)
 
           TARGET_MODEL=""
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "$INPUT_MODEL" ]; then
             TARGET_MODEL="$INPUT_MODEL"
           elif [ "${{ github.event_name }}" == "issue_comment" ]; then
-            EXTRACTED_MODEL=$(echo "$COMMENT_BODY" | grep -oE '--model[ =][a-zA-Z0-9.-]+' | awk '{print $2}' || true)
+            EXTRACTED_MODEL=$(echo "$COMMENT_BODY" | grep -oE '--model[ =][a-zA-Z0-9.\/:-]+' | awk '{print $2}' || true)
             if [ -n "$EXTRACTED_MODEL" ]; then
               TARGET_MODEL="$EXTRACTED_MODEL"
             fi
@@ -110,9 +113,24 @@ jobs:
 
           test_model () {
             local m="$1"
+            local endpoint="https://antigravity-seven-delta.vercel.app/v1/chat/completions"
+            local auth_header="Authorization: Bearer dummy-token"
+
+            if [[ "$m" == groq/* ]]; then
+              endpoint="https://api.groq.com/openai/v1/chat/completions"
+              auth_header="Authorization: Bearer $GROQ_API_KEY"
+            elif [[ "$m" == *"-free"* ]] \vert{}\vert{} [[ "$m" == coding-* ]]; then
+              endpoint="https://aihubmix.com/v1/chat/completions"
+              auth_header="Authorization: Bearer $AIHUBMIX_API_KEY"
+            elif [[ "$m" == *:free ]]; then
+              endpoint="https://unorouter.com/v1/chat/completions"
+              auth_header="Authorization: Bearer $UNOROUTER_API_KEY"
+            fi
+
             local res
-            res=$(curl -s -w "%{http_code}" -X POST "https://antigravity-seven-delta.vercel.app/v1/chat/completions" \
+            res=$(curl -s -w "\%{http_code}" -X POST "$endpoint" \
               -H "Content-Type: application/json" \
+              -H "$auth_header" \
               -d "{\"model\": \"$m\", \"messages\": [{\"role\": \"user\", \"content\": \"ping\"}]}" -o /dev/null)
             if [ "$res" -eq 200 ]; then
               return 0
@@ -122,20 +140,18 @@ jobs:
           }
 
           SELECTED=""
-          if [ -n "$TARGET_MODEL" ] && echo "$ACTIVE_MODELS" | grep -q "^${TARGET_MODEL}$"; then
+          if [ -n "$TARGET_MODEL" ]; then
             if test_model "$TARGET_MODEL"; then
               SELECTED="$TARGET_MODEL"
             fi
           fi
 
           if [ -z "$SELECTED" ]; then
-            PREFERRED_LIST="gemini-3.1-flash-lite gemini-2.5-flash gemini-3.5-flash gemma-4-31b-it"
+            PREFERRED_LIST="qwen/qwen3.6-27b codestral-latest:free gemini-3.7-flash-free gemini-3.1-flash-lite gemini-2.5-flash gemma-4-31b-it"
             for candidate in $PREFERRED_LIST; do
-              if echo "$ACTIVE_MODELS" | grep -q "^${candidate}$"; then
-                if test_model "$candidate"; then
-                  SELECTED="$candidate"
-                  break
-                fi
+              if test_model "$candidate"; then
+                SELECTED="$candidate"
+                break
               fi
             done
           fi
@@ -144,9 +160,17 @@ jobs:
             SELECTED=$(echo "$ACTIVE_MODELS" | head -n 1)
           fi
 
+          if [ -z "$SELECTED" ]; then
+            SELECTED="qwen/qwen3.6-27b"
+          fi
+
           echo "SELECTED_MODEL=$SELECTED" >> $GITHUB_ENV
 
-      - name: Configure Hermes Provider Config for SteveAI
+      - name: Configure Hermes Provider Config for SteveAI & Multi-Providers
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          AIHUBMIX_API_KEY: ${{ secrets.AIHUBMIX_API_KEY }}
+          UNOROUTER_API_KEY: ${{ secrets.UNOROUTER_API_KEY }}
         run: |
           mkdir -p $HOME/.hermes
           cat << CONFIG > $HOME/.hermes/config.yaml
@@ -160,6 +184,15 @@ jobs:
             opencode:
               base_url: https://opencode.zen/v1
               api_key: keyless
+            groq:
+              base_url: https://api.groq.com/openai/v1
+              api_key: ${GROQ_API_KEY}
+            aihubmix:
+              base_url: https://aihubmix.com/v1
+              api_key: ${AIHUBMIX_API_KEY}
+            unorouter:
+              base_url: https://unorouter.com/v1
+              api_key: ${UNOROUTER_API_KEY}
           CONFIG
 
       - name: Resolve Active User Context & Restore Memory
@@ -191,7 +224,7 @@ jobs:
           if [ "${{ github.event_name }}" == "schedule" ] \vert{}\vert{} [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             GOAL="Run automated Hermes Cron system maintenance, security audit, and documentation drift checks."
           else
-            GOAL=$(echo "$COMMENT_BODY" | sed 's/\/hermes//g' | sed -E 's/--model[ =][a-zA-Z0-9.-]+//g' | xargs)
+            GOAL=$(echo "$COMMENT_BODY" | sed 's/\/hermes//g' | sed -E 's/--model[ =][a-zA-Z0-9.\/:-]+//g' | xargs)
             
             URLS=$(echo "$COMMENT_BODY" | grep -oE 'https://[^\s\)]+' || true)
             for url in $URLS; do
@@ -221,6 +254,9 @@ jobs:
           HERMES_STREAM: "true"
           OPENAI_BASE_URL: "https://antigravity-seven-delta.vercel.v1"
           OPENAI_API_KEY: "dummy-token"
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          AIHUBMIX_API_KEY: ${{ secrets.AIHUBMIX_API_KEY }}
+          UNOROUTER_API_KEY: ${{ secrets.UNOROUTER_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.HERMES_PAT || secrets.GITHUB_TOKEN }}
           HERMES_YOLO: "true"
@@ -234,19 +270,28 @@ jobs:
         run: |
           PROMPT="[User Context: $ACTIVE_USER_ID]$GOAL. Available files in workspace/downloads: $(ls -la ./workspace/downloads 2>/dev/null || echo 'None')"
 
+          TARGET_PROVIDER="openai"
+          if [[ "${{ env.SELECTED_MODEL }}" == groq/* ]]; then
+            TARGET_PROVIDER="groq"
+          elif [[ "${{ env.SELECTED_MODEL }}" == *"-free"* ]] \vert{}\vert{} [[ "${{ env.SELECTED_MODEL }}" == coding-* ]]; then
+            TARGET_PROVIDER="aihubmix"
+          elif [[ "${{ env.SELECTED_MODEL }}" == *:free ]]; then
+            TARGET_PROVIDER="unorouter"
+          fi
+
           if command -v hermes &> /dev/null; then
-            hermes run --prompt "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" --yolo 2>&1 | tee hermes_execution.log || hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log
+            hermes run --prompt "$PROMPT" --provider "$TARGET_PROVIDER" --model "${{ env.SELECTED_MODEL }}" --yolo 2>&1 \vert{} tee hermes_execution.log \vert{}\vert{} hermes chat -q "$PROMPT" --provider "$TARGET_PROVIDER" --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log
           elif [ -f "$HOME/.local/bin/hermes" ]; then
-            $HOME/.local/bin/hermes run --prompt "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" --yolo 2>&1 \vert{} tee hermes_execution.log \vert{}\vert{} $HOME/.local/bin/hermes chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log
+            $HOME/.local/bin/hermes run --prompt "$PROMPT" --provider "$TARGET_PROVIDER" --model "${{ env.SELECTED_MODEL }}" --yolo 2>&1 | tee hermes_execution.log || $HOME/.local/bin/hermes chat -q "$PROMPT" --provider "$TARGET_PROVIDER" --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log
           else
-            python3 -m hermes_agent chat -q "$PROMPT" --provider openai --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log || echo "Hermes execution complete."
+            python3 -m hermes_agent chat -q "$PROMPT" --provider "$TARGET_PROVIDER" --model "${{ env.SELECTED_MODEL }}" 2>&1 | tee hermes_execution.log || echo "Hermes execution complete."
           fi
 
       - name: Secure Attachment Parser & JSON Builder
         if: ${{ always() }}
         run: |
           if [ -f "hermes_execution.log" ]; then
-            sed -i -E 's/(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]{32,})/[MASKED_SECRET]/g' hermes_execution.log
+            sed -i -E 's/(ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9]{32,}|gsk_[A-Za-z0-9]+)/[MASKED_SECRET]/g' hermes_execution.log
           fi
 
           python3 - << 'EOF'
