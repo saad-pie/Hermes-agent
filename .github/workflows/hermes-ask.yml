@@ -12,7 +12,7 @@ on:
         required: true
         type: string
       model:
-        description: "Optional custom model override"
+        description: "Optional custom model override (e.g. qwen/qwen3.6-27b, codestral-latest:free, gemini-3.7-flash-free)"
         required: false
         type: string
       user_id:
@@ -20,7 +20,7 @@ on:
         required: false
         type: string
       target_layer:
-        description: "Direct layer trigger override (claude, chatgpt, gemini, background, memory, direct)"
+        description: "Direct layer trigger override (claude, chatgpt, gemini, background, memory, direct, master)"
         required: false
         type: string
 
@@ -42,13 +42,24 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Resolve Target Layer Workflow
+      - name: Resolve Target Layer Workflow & Model Provider
         id: router
         env:
           RAW_PROMPT: ${{ github.event.client_payload.question || inputs.question || github.event.comment.body }}
           MANUAL_LAYER: ${{ inputs.target_layer }}
+          INPUT_MODEL: ${{ github.event.client_payload.model || inputs.model }}
         run: |
           PROMPT_LOWER=$(echo "$RAW_PROMPT" | tr '[:upper:]' '[:lower:]')
+          
+          # Extract --model override if present in issue comments
+          EXTRACTED_MODEL=""
+          if echo "$RAW_PROMPT" | grep -qE '--model[ =]'; then
+            EXTRACTED_MODEL=$(echo "$RAW_PROMPT" | grep -oE '--model[ =][a-zA-Z0-9.\/:-]+' | awk '{print $2}' || true)
+          fi
+
+          EFFECTIVE_MODEL="${INPUT_MODEL:-$EXTRACTED_MODEL}"
+          echo "EFFECTIVE_MODEL=$EFFECTIVE_MODEL" >> $GITHUB_ENV
+
           TARGET="claude-os.yml"
           if [ -n "$MANUAL_LAYER" ]; then
             case "$MANUAL_LAYER" in
@@ -57,10 +68,12 @@ jobs:
               gemini) TARGET="gemini-workspace.yml" ;;
               background) TARGET="background-orchestrator.yml" ;;
               memory) TARGET="memory-sync.yml" ;;
-              direct) TARGET="hermes-master.yml" ;;
+              direct|master) TARGET="hermes-master.yml" ;;
             esac
           else
-            if echo "$PROMPT_LOWER" | grep -qE "research|scrape|excel|xlsx|pdf|search|report"; then
+            if echo "$PROMPT_LOWER" | grep -qE "code|script|build|fix|refactor|pull request|pr|issue|deploy|git|commit"; then
+              TARGET="hermes-master.yml"
+            elif echo "$PROMPT_LOWER" | grep -qE "research|scrape|excel|xlsx|pdf|search|report"; then
               TARGET="chatgpt-research.yml"
             elif echo "$PROMPT_LOWER" | grep -qE "gmail|docs|calendar|drive|workspace|audio|video"; then
               TARGET="gemini-workspace.yml"
@@ -72,9 +85,10 @@ jobs:
               TARGET="claude-os.yml"
             fi
           fi
+
           echo "DISPATCH_TARGET=$TARGET" >> $GITHUB_ENV
           echo "RAW_PROMPT_VAL=$RAW_PROMPT" >> $GITHUB_ENV
-          echo "Target selected: $TARGET"
+          echo "Target selected: $TARGET (Model: ${EFFECTIVE_MODEL:-Default})"
 
       - name: Dispatch Worker Sub-Workflow
         uses: actions/github-script@v7
@@ -84,10 +98,10 @@ jobs:
             const targetWorkflow = process.env.DISPATCH_TARGET;
             const question = process.env.RAW_PROMPT_VAL || "Default query executed by router";
             const userId = "${{ github.event.client_payload.user_id || inputs.user_id || (github.event.comment && github.event.comment.user.login) || 'public_user' }}";
-            const modelOverride = "${{ github.event.client_payload.model || inputs.model || '' }}";
+            const modelOverride = process.env.EFFECTIVE_MODEL || "";
             const issueNumber = context.issue ? context.issue.number : null;
 
-            console.log(`Dispatching target: ${targetWorkflow} for user ${userId}`);
+            console.log(`Dispatching target: ${targetWorkflow} for user ${userId} with model: ${modelOverride || 'default'}`);
 
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
@@ -102,7 +116,7 @@ jobs:
                 model: modelOverride,
                 issue_number: issueNumber ? String(issueNumber) : "",
                 action_type: "auto_routed",
-                payload: JSON.stringify({ question, userId }),
+                payload: JSON.stringify({ question, userId, model: modelOverride }),
                 job_id: `job-${Date.now()}`,
                 memory_payload: question
               }
